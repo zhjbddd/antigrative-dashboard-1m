@@ -1,0 +1,83 @@
+// App-independent preferences: no renderer origin, account or conversation data.
+import { readFile, mkdir, open, rename, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { platformPaths } from './platform.mjs';
+
+export function validateUsageScope(value) {
+  if(!['local','account'].includes(value))throw new Error('Invalid usage scope preference');
+  return value;
+}
+function storedUsageScope(value) {
+  return ['local','account'].includes(value)?value:undefined;
+}
+export function validateAutoRelaunchDebug(value) {
+  if(typeof value!=='boolean')throw new Error('Invalid auto relaunch preference');
+  return value;
+}
+function storedAutoRelaunchDebug(value) {
+  return typeof value==='boolean'?value:undefined;
+}
+export function validateLanguage(value) {
+  if (value!=='en'&&value!=='zh-CN'&&value!=='zh-TW') throw new Error('Invalid language preference');
+  return value;
+}
+
+export function validateSpeedStyle(value) {
+  if (value!=='minimal'&&value!=='cat') throw new Error('Invalid speed style preference');
+  return value;
+}
+const storedSpeedStyle=value=>value==='minimal'||value==='cat'?value:null;
+
+export class PreferencesStore {
+  constructor({file=join(dirname(platformPaths().settings),'preferences.json')}={}) {
+    this.file=file;this.queue=Promise.resolve();
+  }
+  async get() {
+    await this.queue;
+    try {
+      const value=JSON.parse((await readFile(this.file,'utf8')).replace(/^\uFEFF/,''));
+      if(value.schema!==1)throw new Error('Invalid preferences schema');
+      const usageScope=storedUsageScope(value.usageScope);
+      const autoRelaunchDebug=storedAutoRelaunchDebug(value.autoRelaunchDebug);
+      return {language:value.language===null?null:validateLanguage(value.language),languageGuideDismissed:value.languageGuideDismissed===true,usageGuideDismissed:value.usageGuideDismissed===true,speedStyle:storedSpeedStyle(value.speedStyle),...(usageScope?{usageScope}:{}),...(typeof autoRelaunchDebug==='boolean'?{autoRelaunchDebug}:{}),revision:Number.isSafeInteger(value.revision)&&value.revision>=0?value.revision:0};
+    } catch(error) {
+      if(error.code==='ENOENT')return {language:null,languageGuideDismissed:false,usageGuideDismissed:false,speedStyle:null,revision:0};
+      throw new Error('Language preference could not be read');
+    }
+  }
+  async set(input) {
+    if(!input||typeof input!=='object'||Array.isArray(input)||!Object.keys(input).length||Object.keys(input).some(key=>!['language','languageGuideDismissed','usageGuideDismissed','speedStyle','usageScope','autoRelaunchDebug'].includes(key)))throw new Error('Invalid preferences request');
+    if(Object.hasOwn(input,'language'))validateLanguage(input.language);
+    if(Object.hasOwn(input,'speedStyle'))validateSpeedStyle(input.speedStyle);
+    if(Object.hasOwn(input,'usageScope'))validateUsageScope(input.usageScope);
+    if(Object.hasOwn(input,'autoRelaunchDebug'))validateAutoRelaunchDebug(input.autoRelaunchDebug);
+    if(Object.hasOwn(input,'languageGuideDismissed')&&input.languageGuideDismissed!==true)throw new Error('Invalid guide preference');
+    if(Object.hasOwn(input,'usageGuideDismissed')&&input.usageGuideDismissed!==true)throw new Error('Invalid usage guide preference');
+    const operation=this.queue.then(async()=>{
+      await mkdir(dirname(this.file),{recursive:true});
+      let prior=0,previous={language:null,languageGuideDismissed:false,usageGuideDismissed:false,speedStyle:null,usageScope:undefined,autoRelaunchDebug:undefined};
+      try {const value=JSON.parse((await readFile(this.file,'utf8')).replace(/^\uFEFF/,''));if(Number.isSafeInteger(value.revision))prior=value.revision;previous={language:['en','zh-CN','zh-TW'].includes(value.language)?value.language:null,languageGuideDismissed:value.languageGuideDismissed===true,usageGuideDismissed:value.usageGuideDismissed===true,speedStyle:storedSpeedStyle(value.speedStyle),usageScope:storedUsageScope(value.usageScope),autoRelaunchDebug:storedAutoRelaunchDebug(value.autoRelaunchDebug)};}catch{}
+      const language=Object.hasOwn(input,'language')?input.language:previous.language;
+      const languageGuideDismissed=previous.languageGuideDismissed||Object.hasOwn(input,'language')||input.languageGuideDismissed===true;
+      const usageGuideDismissed=previous.usageGuideDismissed||input.usageGuideDismissed===true;
+      const speedStyle=Object.hasOwn(input,'speedStyle')?input.speedStyle:previous.speedStyle;
+      const usageScope=Object.hasOwn(input,'usageScope')?input.usageScope:previous.usageScope;
+      const autoRelaunchDebug=Object.hasOwn(input,'autoRelaunchDebug')?input.autoRelaunchDebug:previous.autoRelaunchDebug;
+      const revision=Math.max(Date.now(),prior+1);
+      const temporary=this.file+'.'+process.pid+'.'+randomUUID()+'.tmp';
+      try {
+        const handle=await open(temporary,'wx',0o600);
+        try {await handle.writeFile(JSON.stringify({schema:1,language,languageGuideDismissed,usageGuideDismissed,speedStyle,...(usageScope?{usageScope}:{}),...(typeof autoRelaunchDebug==='boolean'?{autoRelaunchDebug}:{}),revision})+'\n','utf8');await handle.sync();}
+        finally {await handle.close();}
+        await rename(temporary,this.file);
+      } finally {await rm(temporary,{force:true});}
+      return {language,languageGuideDismissed,usageGuideDismissed,speedStyle,...(usageScope?{usageScope}:{}),...(typeof autoRelaunchDebug==='boolean'?{autoRelaunchDebug}:{}),revision};
+    });
+    this.queue=operation.catch(()=>{});
+    return operation;
+  }
+  async snapshot() {
+    try {return await this.get();}catch{return {error:'Language preference could not be read'};}
+  }
+}

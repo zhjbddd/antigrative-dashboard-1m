@@ -1,0 +1,127 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,rm,readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
+import {UsageLedger,DesktopUsage,usageRecords,dateKey} from '../usage.mjs';
+import {MetricsStore} from '../store.mjs';
+const scope=s=>createHash('sha256').update(s).digest('hex'),account=scope('account A');
+const id='11111111-1111-1111-1111-111111111111',other='22222222-2222-2222-2222-222222222222';
+const raw=(options={})=>({trajectory:{steps:[{type:'CORTEX_STEP_TYPE_PLANNER_RESPONSE',metadata:{createdAt:'2026-10-10T16:05:00Z',...options.metadata}}],generatorMetadata:[{stepIndices:[0],chatModel:{modelDisplayName:options.model||'Gemini 3.8',...(options.start?{chatStartMetadata:{createdAt:options.start}}:{}),usage:{apiProvider:'API_PROVIDER_GOOGLE_GEMINI',responseId:'private-request-id',inputTokens:'100',cacheReadTokens:'900',cacheWriteTokens:'20',outputTokens:'80',thinkingOutputTokens:'30',...options.usage}}}]}});
+async function fixture(t){const dir=await mkdtemp(join(tmpdir(),'ag-usage-'));t.after(()=>rm(dir,{recursive:true,force:true}));return new UsageLedger(dir);}
+test('usage survives restart, upserts, and deduplicates across conversations',async t=>{
+ const ledger=await fixture(t);await Promise.all([ledger.ingest(account,id,raw()),ledger.ingest(account,id,raw())]);
+ await ledger.ingest(account,other,raw());let summary=await new UsageLedger(ledger.directory).summary(account,Date.parse('2026-10-11T02:00:00Z'));
+ assert.equal(summary.totalTokens,1100);assert.equal(summary.requests,1);assert.equal(summary.todayTokens,1100);
+ await ledger.ingest(account,id,raw({usage:{outputTokens:100}}));summary=await ledger.summary(account);assert.equal(summary.totalTokens,1120);
+ await ledger.ingest(account,id,{trajectory:{generatorMetadata:[]}});assert.equal((await ledger.summary(account)).totalTokens,1120);
+ const content=await readFile(ledger.file(account,id),'utf8');assert.equal(content.includes('private-request-id'),false);assert.equal(content.includes(id),false);
+ assert.equal((await ledger.summary(scope('other'))).totalTokens,0);assert.throws(()=>ledger.file(account,'../escape'));
+});
+test('request time wins, planner-created is fallback, and unknown dates stay out of today',async t=>{
+ assert.equal(dateKey(Date.parse('2026-10-10T16:05:00Z')),'2026-10-11');
+ assert.equal(usageRecords(raw(),id)[0].timeBasis,'planner-created');
+ const start=usageRecords(raw({start:'2026-10-10T15:59:59Z'}),id)[0];assert.equal(dateKey(start.at),'2026-10-10');assert.equal(start.timeBasis,'request-start');
+ const ledger=await fixture(t);await ledger.ingest(account,id,raw({metadata:{createdAt:undefined}}));
+ const summary=await ledger.summary(account,Date.parse('2026-10-11T02:00:00Z'));assert.equal(summary.unknownTokens,1100);assert.equal(summary.unknownRequests,1);assert.equal(summary.todayTokens,0);assert.equal(summary.totalTokens,1100);
+ await ledger.ingest(account,id,raw());assert.equal((await ledger.summary(account)).unknownRequests,0);
+});
+test('thinking is included once, anomalous TPS is irrelevant, partial fields do not destroy known counts',async t=>{
+ const r=usageRecords(raw(),id)[0];assert.equal(r.output,80);assert.equal(r.uncached+r.cacheRead+r.cacheWrite+r.output,1100);
+ const ledger=await fixture(t);await ledger.ingest(account,id,raw());await ledger.ingest(account,id,raw({usage:{outputTokens:'invalid'}}));
+ const summary=await ledger.summary(account);assert.equal(summary.totalTokens,1100);assert.equal(summary.partialRequests,1);
+ const invalid=raw({usage:{inputTokens:'bad',cacheReadTokens:'bad',outputTokens:'50'}});assert.equal(usageRecords(invalid,id)[0].partial,true);
+});
+test('weekly/monthly buckets use the configured calendar, unreadable records are reported',async t=>{
+ const ledger=await fixture(t);await ledger.ingest(account,id,raw({start:'2026-09-30T16:00:00Z'}));
+ await ledger.ingest(account,other,raw({usage:{responseId:'request-two'},start:'2026-10-11T00:00:00Z'}));
+ let summary=await ledger.summary(account,Date.parse('2026-10-11T08:00:00Z'));assert.equal(summary.monthTokens,2200);assert.equal(summary.weekTokens,1100);
+ await writeFile(ledger.file(account,other),'{broken');summary=await new UsageLedger(ledger.directory).summary(account);assert.equal(summary.unreadableFiles,1);
+});
+test('backfill refreshes changed trajectories and isolates an account change in flight',async t=>{
+ const ledger=await fixture(t);let calls=0,release;const store={identity:account,epoch:1,listConversations:async()=>[{id,modifiedAt:'one',status:'DONE'}],client:{trajectory:async()=>{calls++;return raw();}}};
+ const tracker=new DesktopUsage(store,ledger);await tracker.sync();await tracker.sync();assert.equal(calls,1);assert.equal((await tracker.snapshot()).totalTokens,1100);
+ store.listConversations=async()=>[{id:other,modifiedAt:'two',status:'DONE'}];store.client.trajectory=()=>new Promise(r=>{release=r;});
+ const pending=tracker.sync();await new Promise(r=>setImmediate(r));store.identity=scope('B');store.epoch++;release(raw());await pending;
+ assert.equal((await ledger.summary(store.identity)).totalTokens,0);
+});
+test('MetricsStore forwards authenticated raw records and preserves live speed on ledger failure',async()=>{
+ const history={load:async()=>null,save:async()=>null};let scopeSeen=null;
+ const client={discover:async()=>({pid:1}),call:async name=>name==='GetUserStatus'?{userStatus:{email:'fixture@example.test'}}:{},trajectory:async()=>raw()};
+ const store=new MetricsStore(client,{history,onTrajectory:async s=>{scopeSeen=s;throw Error('disk unavailable');}});const result=await store.snapshot({conversationId:id});
+ assert.equal(scopeSeen,scope('fixture@example.test'));assert.equal(store.usagePersistenceError,true);assert.equal(result.speed.counts.input,100);
+ store.onTrajectory=async()=>{};await store.snapshot({conversationId:id,force:true});assert.equal(store.usagePersistenceError,false);
+});
+test('IDE usage keeps a separate ledger and source across collector restarts',async t=>{
+ const desktop=await fixture(t),ide=new UsageLedger(join(desktop.directory,'ide'),{source:'ide-local'});
+ const store={identity:account,epoch:1,listConversations:async()=>[{id,modifiedAt:'one',status:'DONE'}],client:{trajectory:async()=>raw()}};
+ const tracker=new DesktopUsage(store,ide);await tracker.sync();assert.equal((await tracker.snapshot()).source,'ide-local');assert.equal((await tracker.snapshot()).totalTokens,1100);
+ assert.equal((await desktop.summary(account)).totalTokens,0);
+ const restarted=new DesktopUsage(store,new UsageLedger(ide.directory,{source:'ide-local'}));await restarted.sync();assert.equal((await restarted.snapshot()).totalTokens,1100);assert.equal((await restarted.snapshot()).requests,1);
+});
+test('legacy JSON usage rows merge canonical model equivalents on read without mutating disk files',async t=>{
+ const ledger=await fixture(t);
+ assert.equal(usageRecords(raw({model:'claude-sonnet-5-5-medium'}),id)[0].model,'Claude Sonnet 5.5 (Medium)');
+ assert.equal(usageRecords(raw({model:'word/claude-opus-4-6-thinking'}),id)[0].model,'Claude Opus 4.6 (Thinking)');
+ assert.equal(usageRecords(raw({model:'MODEL_PLACEHOLDER_M26'}),id)[0].model,'Claude Opus 4.6 (Thinking)');
+ assert.equal(usageRecords(raw({model:'word/MODEL_PLACEHOLDER_M318'}),id)[0].model,'Gemini 3.8 Flash (High)');
+ assert.equal(usageRecords(raw({model:'gemini-3.8-flash-tiered'}),id)[0].model,'Gemini 3.8 Flash (Tiered)');
+ const at=Date.parse('2026-10-10T16:05:00Z');
+ const make=(key,model)=>({id:scope(key),at,model,uncached:100,cacheRead:0,cacheWrite:0,output:50,partial:false,timeBasis:'request-start'});
+ const jsonPath=ledger.file(account,id),before=JSON.stringify({schema:1,account,records:[
+  make('m1','claude-sonnet-5-5-medium'),make('m2','Claude Sonnet 5.5 (Medium)'),
+  make('e1','claude-sonnet-5-5'),make('e2','claude-sonnet-5.5'),make('e3','word/claude-sonnet-5-5'),
+  make('o1','MODEL_PLACEHOLDER_M26'),make('o2','word/claude-opus-4-6-thinking'),
+  make('f1','MODEL_PLACEHOLDER_M318'),make('f2','word/MODEL_PLACEHOLDER_M318'),
+  make('g1','word/gpt-6.1-sol'),make('g2','gpt-6.1-sol'),
+ ]});
+ await mkdir(join(ledger.directory,account),{recursive:true});await writeFile(jsonPath,before);
+ const summary=await ledger.summary(account,Date.parse('2026-10-11T02:00:00Z'));
+ assert.equal(await readFile(jsonPath,'utf8'),before);
+ assert.deepEqual(summary.models.sort(),['Claude Opus 4.6 (Thinking)','Claude Sonnet 5.5','Claude Sonnet 5.5 (Medium)','GPT-6.1 Sol','Gemini 3.8 Flash (High)']);
+ const buckets=summary.days[0].models;
+ assert.equal(buckets['Claude Sonnet 5.5 (Medium)'].total,300);assert.equal(buckets['Claude Sonnet 5.5 (Medium)'].requests,2);
+ assert.equal(buckets['Claude Sonnet 5.5'].total,450);assert.equal(buckets['Claude Sonnet 5.5'].requests,3);
+ assert.equal(buckets['Claude Opus 4.6 (Thinking)'].total,300);
+ assert.equal(buckets['Gemini 3.8 Flash (High)'].total,300);
+ assert.equal(buckets['GPT-6.1 Sol'].total,300);
+});
+
+test('all-local scope aggregates across accounts + unauthenticated sessions and computes active quota-window reference',async t=>{
+  const ledger=await fixture(t),acctB=scope('account B'),cid3='33333333-3333-3333-3333-333333333333';
+  const now=Date.parse('2026-10-11T08:00:00Z');
+  const fiveReset=new Date(now+2*3600000).toISOString();
+  const weekReset=new Date(now+3*86400000).toISOString();
+  await ledger.ingest(account,id,raw({model:'Gemini 3.8 Pro',start:'2026-10-11T06:00:00Z',usage:{responseId:'a-1',inputTokens:'100',cacheReadTokens:'900',cacheWriteTokens:'0',outputTokens:'100'}}));
+  await ledger.ingest(account,other,raw({model:'Gemini 3.8 Pro',start:'2026-10-01T00:00:00Z',usage:{responseId:'a-old',inputTokens:'500',cacheReadTokens:'0',cacheWriteTokens:'0',outputTokens:'500'}}));
+  await ledger.ingest(acctB,cid3,raw({model:'Claude Sonnet 4.5',start:'2026-10-11T07:00:00Z',usage:{responseId:'b-1',inputTokens:'200',cacheReadTokens:'1800',cacheWriteTokens:'0',outputTokens:'200'}}));
+  await ledger.ingest(acctB,other,raw({model:'Gemini 3.8 Pro',start:'2026-10-11T06:00:00Z',usage:{responseId:'a-1',inputTokens:'100',cacheReadTokens:'900',cacheWriteTokens:'0',outputTokens:'100'}}));
+  const groups=[
+    {id:'gemini',name:'Gemini',windows:{'5h':{available:true,remaining:0.8,resetAt:fiveReset},weekly:{available:true,remaining:0.98,resetAt:weekReset}}},
+    {id:'3p',name:'Claude / GPT',windows:{'5h':{available:true,remaining:0.5,resetAt:fiveReset},weekly:{available:true,remaining:0.5,resetAt:weekReset}}},
+  ];
+  const store={identity:account,epoch:1,listConversations:async()=>[],client:{trajectory:async()=>raw()}};
+  const tracker=new DesktopUsage(store,ledger);t.after(()=>tracker.dispose());
+  const localSnap=await tracker.snapshot({sync:false,scope:'local',groups});
+  assert.equal(localSnap.scope,'local');assert.equal(localSnap.accountKey,'all-local');assert.equal(localSnap.accountsCount,2);
+  assert.equal(localSnap.requests,3);
+  assert.equal(localSnap.totalTokens,1100+1000+2200);
+  assert.equal(localSnap.quotaWindows['gemini:5h'].observedTokens,1100);
+  assert.equal(localSnap.quotaWindows['gemini:5h'].estimatedFullTokens,5500);
+  assert.equal(localSnap.quotaWindows['gemini:weekly'].observedTokens,1100);
+  assert.equal(localSnap.quotaWindows['gemini:weekly'].estimatedFullTokens,null);
+  assert.equal(localSnap.quotaWindows['3p:5h'],undefined);
+  const acctSnap=await tracker.snapshot({sync:false,scope:'account',groups});
+  assert.equal(acctSnap.scope,'account');assert.equal(acctSnap.totalTokens,2100);assert.equal(acctSnap.quotaWindows['gemini:5h'].observedTokens,1100);
+  store.identity=null;store.epoch++;
+  await ledger.ingest(scope('ag-pulse:local-unauthenticated'),cid3,raw({model:'Gemini 3.8 Flash',start:'2026-10-11T07:30:00Z',usage:{responseId:'unauth-1',inputTokens:'300',cacheReadTokens:'0',cacheWriteTokens:'0',outputTokens:'100'}}));
+  tracker.ingestLive(scope('ag-pulse:local-unauthenticated'),id,raw({usage:{responseId:'live-unauth',inputTokens:'50',cacheReadTokens:'0',cacheWriteTokens:'0',outputTokens:'50'}}));
+  const liveDeadline=Date.now()+10000;
+  while(tracker.liveStates.size>0||ledger.usageWrites.size>0){if(Date.now()>liveDeadline)throw Error('live ingest did not settle');await new Promise(r=>setTimeout(r,10));}
+  await ledger.queue;
+  const unauthLocal=await tracker.snapshot({sync:false,scope:'local',groups});
+  assert.equal(unauthLocal.accountAvailable,false);assert.equal(unauthLocal.accountsCount,2);assert.equal(unauthLocal.totalTokens,1100+1000+2200+400+100);
+  const unauthAcct=await tracker.snapshot({sync:false,scope:'account',groups});
+  assert.equal(unauthAcct.accountAvailable,false);assert.equal(unauthAcct.totalTokens,0);
+});

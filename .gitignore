@@ -1,0 +1,11 @@
+node_modules/
+*.db
+*.sqlite
+*.db-wal
+*.db-shm
+*.log
+*.tmp
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
