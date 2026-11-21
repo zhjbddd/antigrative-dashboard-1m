@@ -8,7 +8,7 @@ import {mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {AntigravityClient} from '../client.mjs';
-import {httpLogPorts,readLogTail} from '../discovery.mjs';
+import {discoveryCommandError,httpLogPorts,readLogTail,resolveDaemonCredential} from '../discovery.mjs';
 
 // Synthetic RPC fixtures own every accepted socket. End them explicitly:
 // HTTP keep-alive teardown must not hold the cross-platform test runner open.
@@ -137,4 +137,49 @@ test('readLogTail extracts newest HTTP port from >1 MiB logs both at tail and be
  const headFile=join(dir,'head.log');
  await writeFile(headFile,'listening on random port at 3333 for HTTP\n'+'y'.repeat(700*1024)+'\n');
  assert.deepEqual(httpLogPorts(await readLogTail(headFile,'utf8')),[3333]);
+});
+
+test('AntigravityClient discovers 2.34+ CSRF token from matching daemon hub file when --csrf_token is omitted from cmdline',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ag-daemon-234-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const logFile=join(dir,'language_server.log');
+ await writeFile(logFile,'listening on random port at 60252 for HTTP\n');
+ await writeFile(join(dir,'hub_9999.json'),JSON.stringify({pid:999,httpPort:9999,httpsPort:9998,csrfToken:'stale-token'}));
+ await writeFile(join(dir,'hub_60252.json'),JSON.stringify({pid:21141,httpPort:60252,httpsPort:60251,csrfToken:'daemon-token-234'}));
+ const client=new AntigravityClient({
+  paths:()=>({log:logFile,logCandidates:[logFile],daemonDir:dir}),
+  processes:async()=>[{ProcessId:21141,CommandLine:'language_server --standalone --app_data_dir antigravity --read_host_bridge_token_from_stdin',Ports:[60251,60252]}],
+  pidAlive:()=>true,
+  probe:async()=>true,
+  now:()=>0
+ });
+ const server=await client.discover();
+ assert.deepEqual(server,{port:60252,csrf:'daemon-token-234',pid:21141});
+ const staleOnly=await resolveDaemonCredential({commandLine:'language_server --standalone',pid:12345,ports:[60252],daemonDir:dir});
+ assert.equal(staleOnly,null);
+});
+
+test('verifyCachedServer renews 15s discovery lease without rescanning until PID exits or port probe fails',async ()=>{
+ let scans=0,alive=true,reachable=true,now=0;
+ const client=new AntigravityClient({
+  paths:()=>({log:'/nonexistent',logCandidates:['/nonexistent']}),
+  readLog:async()=>'listening on random port at 1234 for HTTP\n',
+  logStat:async()=>({mtimeMs:1}),
+  processes:async()=>{scans++;return [{ProcessId:42,CommandLine:'language_server --standalone --csrf_token=fixture',Ports:[1234]}];},
+  pidAlive:()=>alive,
+  probe:async()=>reachable,
+  now:()=>now
+ });
+ await client.discover();
+ assert.equal(scans,1);
+ now=20000;
+ await client.discover();
+ assert.equal(scans,1,'Alive PID + reachable port should renew lease without process rescan');
+ reachable=false;now=40000;
+ await client.discover();
+ assert.equal(scans,2,'Unreachable port should force process rescan');
+});
+
+test('discoveryCommandError sanitizes timeout and command failures without leaking raw command lines',()=>{
+ assert.equal(discoveryCommandError(Object.assign(new Error('Command failed: ps -ww'),{killed:true})).message,'读取 Antigravity 进程信息超时');
+ assert.equal(discoveryCommandError(new Error('Command failed: powershell.exe -Command ...')).message,'无法读取 Antigravity 进程信息');
 });

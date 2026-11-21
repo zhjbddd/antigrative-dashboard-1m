@@ -2,25 +2,26 @@ import { stat } from 'node:fs/promises';
 import { request } from 'node:http';
 import {setImmediate as yieldStream} from 'node:timers/promises';
 import { platformPaths } from '../../compat/platform.mjs';
-import { discoverProcesses,httpLogPorts,readLogTail } from './discovery.mjs';
+import { discoverProcesses,httpLogPorts,readLogTail,probeLoopbackPort,isProcessAlive,resolveDaemonCredential } from './discovery.mjs';
 import { TrajectoryJson } from './trajectory-json.mjs';
 import { TrajectoryReader } from './trajectory-reader.mjs';
 
 const SERVICE = '/exa.language_server_pb.LanguageServerService/';
-function serverFromPorts(logPorts, processes) {
+function serverFromPorts(logPorts, processes, { daemon = null } = {}) {
   const rows = (Array.isArray(processes) ? processes : [processes]).filter(p => /--standalone\b/.test(p.CommandLine || ''));
   if (rows.length !== 1) throw new Error(rows.length ? '检测到多个 Antigravity 实例，请保留一个' : '未找到 Antigravity 桌面后台');
   const ports = new Set([rows[0].Ports].flat().map(Number));
-  const port = logPorts.find(p=>ports.has(p));
+  let port = logPorts.find(p=>ports.has(p));
+  if (!port && daemon?.daemonHttpPort && ports.has(daemon.daemonHttpPort)) port = daemon.daemonHttpPort;
   if (!port) throw new Error('等待 Antigravity 本地接口启动');
-  const csrf = rows[0].CommandLine.match(/--csrf_token(?:=|\s+)"?([^\s"]+)/)?.[1];
+  const csrf = rows[0].CommandLine.match(/--csrf_token(?:=|\s+)"?([^\s"]+)/)?.[1] || daemon?.csrf || null;
   if (!csrf) throw new Error('当前版本未提供可用的本地检测凭据');
   return {port,csrf,pid:rows[0].ProcessId};
 }
 export function serverFromDiscovery(log, processes) { return serverFromPorts(httpLogPorts(log),processes); }
 export class AntigravityClient {
-  constructor({paths=platformPaths,readLog=readLogTail,logStat=stat,processes=discoverProcesses,now=Date.now,onRpc=null}={}) {
-    this.paths=paths;this.readLog=readLog;this.logStat=logStat;this.processes=processes;this.now=now;this.onRpc=onRpc;this.reader=new TrajectoryReader(this);
+  constructor({paths=platformPaths,readLog=readLogTail,logStat=stat,processes=discoverProcesses,probe=probeLoopbackPort,pidAlive=isProcessAlive,resolveDaemon=resolveDaemonCredential,now=Date.now,onRpc=null}={}) {
+    this.paths=paths;this.readLog=readLog;this.logStat=logStat;this.processes=processes;this.probe=probe;this.pidAlive=pidAlive;this.resolveDaemon=resolveDaemon;this.now=now;this.onRpc=onRpc;this.reader=new TrajectoryReader(this);
   }
   server = null;
   discoveredAt = 0;
@@ -30,14 +31,29 @@ export class AntigravityClient {
   discoveryFailures = 0;
   discoveryError = null;
 
+  async verifyCachedServer(server) {
+    if (!server || !this.pidAlive(server.pid)) return false;
+    return await this.probe(server.port, { timeoutMs: 400 }).catch(() => false);
+  }
+
   async discover(force = false) {
     if (!force && this.server && this.now() - this.discoveredAt < 15000) return this.server;
     if (this.discovering) return this.discovering;
     if (!force && this.discoveryError && this.now() < this.retryAt) throw this.discoveryError;
-    this.lastScanAt=this.now();
-    this.discovering = this.discoverNow().then(server=>{
-      this.discoveredAt=this.now();this.discoveryFailures=0;this.discoveryError=null;this.retryAt=0;return server;
-    }).catch(error=>{
+    const cached = !force ? this.server : null;
+    this.discovering = (async () => {
+      if (cached && await this.verifyCachedServer(cached) && this.server === cached) {
+        this.discoveredAt = this.now();
+        return cached;
+      }
+      this.lastScanAt = this.now();
+      const server = await this.discoverNow();
+      this.discoveredAt = this.now();
+      this.discoveryFailures = 0;
+      this.discoveryError = null;
+      this.retryAt = 0;
+      return server;
+    })().catch(error=>{
       this.discoveryError=error;this.discoveryFailures++;
       this.retryAt=this.now()+Math.min(30000,3000*2**Math.min(4,this.discoveryFailures-1));throw error;
     }).finally(() => { this.discovering = null; });
@@ -75,6 +91,10 @@ export class AntigravityClient {
     const expectedPorts=[...new Set(logs.flatMap(log=>log.ports||[]))];
     const parsed = await this.processes({expectedPorts});
     if (!parsed || Array.isArray(parsed) && !parsed.length) throw new Error('请先打开 Antigravity');
+    const standalone = (Array.isArray(parsed) ? parsed : [parsed]).filter(p => /--standalone\b/.test(p.CommandLine || ''));
+    const daemon = standalone.length === 1
+      ? await this.resolveDaemon({ commandLine: standalone[0].CommandLine, pid: standalone[0].ProcessId, ports: standalone[0].Ports, daemonDir: paths.daemonDir }).catch(() => null)
+      : null;
     // Credentials stay in process memory. They are never logged, persisted, or
     // returned to a browser; all calls go exclusively to 127.0.0.1.
     let foundLog=false,lastError=null;
@@ -82,9 +102,15 @@ export class AntigravityClient {
       try {
         if(entry.error)throw entry.error;
         foundLog=true;
-        this.server=serverFromPorts(entry.ports,parsed);break;
+        this.server=serverFromPorts(entry.ports,parsed,{daemon});break;
       } catch(error) {
         if(error.code!=='ENOENT'&&error.code!=='ENOTDIR')lastError=error;
+      }
+    }
+    if (!this.server && daemon?.daemonHttpPort && standalone.length === 1) {
+      const livePorts = new Set([standalone[0].Ports].flat().map(Number));
+      if (livePorts.has(daemon.daemonHttpPort)) {
+        this.server = serverFromPorts([], parsed, { daemon });
       }
     }
     if(!this.server)throw lastError||new Error(foundLog?'等待 Antigravity 本地接口启动':'未找到 Antigravity 语言服务日志，请检查日志路径');

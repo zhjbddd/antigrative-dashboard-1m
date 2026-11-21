@@ -246,3 +246,120 @@ test('an uncertain outcome after committing never reruns installation and a fres
  const checked=await fixture.service.check();assert.equal(checked.state,'current');assert.equal(checked.currentVersion,'0.8.7');assert.equal(applies,1);
  assert.deepEqual((await readdir(fixture.service.dataDir)).filter(name=>name.startsWith('plan-')),[]);
 });
+
+test('passive check populates available summary, throttles repeats and keeps offline errors silent',async t=>{
+ let calls=0,now=1000,fail=true;
+ const {service}=await setup(t,async()=>{
+  calls++;
+  if(fail)throw Error('network');
+  return {host:'app',currentVersion:'0.8.6',latestVersion:'0.8.7',hasUpdate:true,notes:'Fix'};
+ });
+ service.now=()=>now;
+ assert.deepEqual(await service.checkPassive({minIntervalMs:60000}),{available:false,latestVersion:null});
+ assert.equal(service.publicState().state,'idle','passive network error must stay silent');
+ assert.equal(calls,1);
+ await service.checkPassive({minIntervalMs:60000});
+ assert.equal(calls,1,'throttled within minIntervalMs');
+ fail=false;now+=60001;
+ assert.deepEqual(await service.checkPassive({minIntervalMs:60000}),{available:true,latestVersion:'0.8.7'});
+ assert.equal(service.publicState().state,'available');
+ assert.equal(calls,2);
+});
+
+test('update dialog renders concise safe markdown by language and clears passive badge on up-to-date',async()=>{
+ const createUpdateMenu=(await import('../../../compat/update-ui.cjs')).default;
+ function makeEl(tag){
+  const el={
+   tagName:tag.toUpperCase(),attrs:{},dataset:{},style:{removeProperty(){}},children:[],
+   hidden:false,disabled:false,href:'',target:'',rel:'',type:'',className:'',id:'',
+   _text:'',_listeners:{},
+   setAttribute(k,v){this.attrs[k]=String(v);if(k==='id')this.id=String(v);if(k==='hidden')this.hidden=true;},
+   removeAttribute(k){delete this.attrs[k];if(k==='hidden')this.hidden=false;},
+   getAttribute(k){return this.attrs[k]??null;},
+   addEventListener(type,fn){(this._listeners[type]??=[]).push(fn);},
+   append(...nodes){for(const n of nodes)this.children.push(typeof n==='string'?{nodeType:3,textContent:n}:n);},
+   replaceChildren(...nodes){this.children=[];this.append(...nodes);},
+   remove(){},showModal(){this.open=true;},close(){this.open=false;},
+   querySelector(sel){return findAll(this,sel)[0]||null;},
+   querySelectorAll(sel){return findAll(this,sel);},
+   get textContent(){return this.children.length?this.children.map(c=>c.textContent).join(''):this._text;},
+   set textContent(v){this.children=[];this._text=String(v??'');}
+  };
+  return el;
+ }
+ function findAll(node,sel){
+  const out=[];
+  for(const ch of node.children||[]){
+   if(ch.nodeType===3)continue;
+   if((sel.startsWith('#')&&ch.id===sel.slice(1))||ch.tagName.toLowerCase()===sel)out.push(ch);
+   out.push(...findAll(ch,sel));
+  }
+  return out;
+ }
+ const ids={};
+ const markupMap=(tag,html)=>{
+  const root=makeEl(tag);
+  if(html.includes('check-update-label')){
+   for(const id of ['check-update-label','check-update-badge']){const s=makeEl('span');s.id=id;if(id==='check-update-badge'){s.hidden=true;const v=makeEl('span');v.id='check-update-ver';s.append(v);}root.append(s);}
+  }else if(html.includes('update-symbol')){
+   const svg=makeEl('svg'),p=makeEl('path');p.id='update-symbol';svg.append(p);root.append(svg);
+  }else if(html.includes('update-notes-wrap')){
+   for(const id of ['update-title','update-close','update-icon','update-status','update-progress-label','update-progress-value','update-progress-track','update-progress-fill','update-current-label','update-current','update-latest-label','update-latest','update-notes-wrap','update-feedback','update-action']){
+    const n=makeEl(id==='update-notes-wrap'?'section':'span');n.id=id;
+    if(id==='update-notes-wrap'){
+     n.hidden=true;
+     const l=makeEl('h2');l.id='update-notes-label';
+     const a=makeEl('a');a.id='update-notes-link';a.hidden=true;
+     const body=makeEl('div');body.id='update-notes';
+     n.append(l,a,body);
+    }
+    root.append(n);
+   }
+  }
+  void ids;
+  return root;
+ };
+ const prevDoc=globalThis.document,prevRaf=globalThis.requestAnimationFrame,prevCaf=globalThis.cancelAnimationFrame;
+ globalThis.document={createElement:tag=>makeEl(tag),createTextNode:text=>({nodeType:3,textContent:String(text)})};
+ globalThis.requestAnimationFrame=()=>1;
+ globalThis.cancelAnimationFrame=()=>{};
+ try{
+  const root=makeEl('div'),row=makeEl('div'),language={language:'zh-CN'};
+  const sampleNotes=[
+   '## 更新内容',
+   '- **适配 `2.34.0+` 凭据**：自动从 `~/.gemini` 读取，并兼容 [说明](https://example.com/doc) 与超长补充说明用于验证自动摘要截断不会遗留半截反引号或加粗标记从而影响弹出卡片排版体验。',
+   '- <img src="https://invalid.example/x">',
+   '## What changed in v0.9.6',
+   '- **Daemon auth:** English summary with `code`.'
+  ].join('\n');
+  let mode='available';
+  const menu=createUpdateMenu({
+   root,row,language,
+   setMarkup:(el,html)=>{const built=markupMap(el.tagName.toLowerCase(),html);el.replaceChildren(...built.children);},
+   request:async()=>mode==='available'?{state:'available',currentVersion:'0.9.5',latestVersion:'0.9.6',notes:sampleNotes}:{state:'current',currentVersion:'0.9.6',latestVersion:'0.9.6'}
+  });
+  menu.syncHint({available:true,latestVersion:'0.9.6'});
+  const btn=row.querySelector('#check-update');
+  assert.equal(btn.querySelector('#check-update-badge').hidden,false);
+  assert.equal(btn.querySelector('#check-update-ver').textContent,'v0.9.6');
+  await btn._listeners.click[0]();
+  const dialog=root.querySelector('#plugin-update-dialog');
+  const notes=dialog.querySelector('#update-notes');
+  assert.equal(notes.querySelectorAll('img').length,0);
+  assert.ok(notes.textContent.includes('<img src="https://invalid.example/x">'));
+  assert.ok(notes.querySelectorAll('strong').length>=1);
+  assert.ok(notes.querySelectorAll('code').length>=2);
+  assert.equal(notes.querySelectorAll('a').length,1);
+  assert.ok(notes.textContent.includes('…'),'long bullets are trimmed cleanly');
+  assert.equal(dialog.querySelector('#update-notes-link').href,'https://github.com/wycocoyu/agy-context-dashboard/releases/tag/v0.9.6');
+  language.language='en';menu.localize();
+  assert.ok(notes.textContent.includes('Daemon auth:'),'switching to English selects English section');
+  assert.equal(notes.textContent.includes('适配'),false);
+  mode='current';
+  await btn._listeners.click[0]();
+  assert.equal(btn.querySelector('#check-update-badge').hidden,true);
+  assert.equal(btn.querySelector('#check-update-ver').textContent,'');
+ }finally{
+  globalThis.document=prevDoc;globalThis.requestAnimationFrame=prevRaf;globalThis.cancelAnimationFrame=prevCaf;
+ }
+});

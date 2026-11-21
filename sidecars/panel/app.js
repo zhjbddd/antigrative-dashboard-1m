@@ -84,17 +84,10 @@ function renderQuota(window, prefix, now = Date.now() + serverOffset) {
   const remaining = language.quotaRemaining(bucket);
   $(`${prefix}-balance`).textContent = bucket?.disabled?t('unavailableQuota'):percent(remaining);
   const forecast = language.quotaForecast(bucket, window, now);
-  const barBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : (remaining !== null && remaining < .2) || forecast?.willExhaust ? 'var(--pulse-warning)' : '';
-  const fill = $(`${prefix}-fill`), projectedFill = $(`${prefix}-projected-fill`), track = $(`${prefix}-track`);
-  // Solid fill is always the real balance; the hatched tail marks what the
-  // current pace is expected to consume before the window resets.
-  const hatch = Boolean(forecast?.forecastReady && remaining !== null && forecast.projectedRemaining < remaining - 0.005);
+  const barBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : '';
+  const fill = $(`${prefix}-fill`), track = $(`${prefix}-track`);
   fill.style.width = typeof remaining === 'number' ? `${remaining * 100}%` : '0%';
   fill.style.background = barBg;
-  if (projectedFill) {
-    projectedFill.style.left = hatch ? `${forecast.projectedRemaining * 100}%` : '0%';
-    projectedFill.style.width = hatch ? `${(remaining - forecast.projectedRemaining) * 100}%` : '0%';
-  }
   const forecastRow = $(`${prefix}-forecast`), forecastMain = $(`${prefix}-forecast-text`);
   if (forecastRow && forecastMain) {
     const showForecast = Boolean(forecast && typeof forecast.timeRemaining === 'number');
@@ -256,7 +249,7 @@ function render() {
         if (valEl && valEl.textContent !== val) valEl.textContent = val;
         if (fillEl) {
           const nextWidth = typeof remaining === 'number' ? `${remaining * 100}%` : '0%';
-          const nextBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : remaining !== null && remaining < .2 ? 'var(--pulse-warning)' : '';
+          const nextBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : '';
           if (fillEl.style.width !== nextWidth) fillEl.style.width = nextWidth;
           if (fillEl.style.background !== nextBg) fillEl.style.background = nextBg;
         }
@@ -303,14 +296,25 @@ function render() {
   cacheAttr('aria-label',currentOnly?t('taskCurrentOnly'):null);
   cacheAttr('title',currentOnly?t('taskCurrentOnly'):null);
   const context=speed?.context,hasCapacity=typeof context?.usedFraction==='number';
+  const transcript=speed?.transcriptStats;
+  const compactions=transcript&&['ready','partial'].includes(transcript.status)&&typeof transcript.compactionMarkers==='number'?transcript.compactionMarkers:null;
+  const compSuffix=compactions!==null&&compactions>0?` · 🗜 ${t('contextCompactionCount',{n:compactions})}`:'';
   $('strip-context').textContent=hasCapacity?`${Math.round(context.usedFraction*100)}%`:'—';
   $('strip-context-size').textContent=context?`${compact(context.usedTokens)} / ${context.maxTokens===null?'—':compact(context.maxTokens)}`:'—';
-  $('context-tab').title=context?t('contextTokens',{used:count(context.usedTokens),max:context.maxTokens===null?'—':count(context.maxTokens)}):t('contextUnknown');
+  $('context-tab').title=(context?t('contextTokens',{used:count(context.usedTokens),max:context.maxTokens===null?'—':count(context.maxTokens)}):t('contextUnknown'))+compSuffix;
   $('context-summary').textContent=hasCapacity?t('contextUsed',{used:Math.round(context.usedFraction*100),remaining:Math.round(context.remainingFraction*100)}):t('contextUnknown');
   $('context-tokens').textContent=context?t('contextTokens',{used:compact(context.usedTokens),max:context.maxTokens===null?'—':compact(context.maxTokens)}):'—';
   $('context-model').textContent=context?.model||'—';
+  const compactionPill=$('context-compaction-pill');
+  if(compactionPill){
+    hidden('context-compaction-pill',!(compactions!==null&&compactions>0));
+    if(compactions!==null&&compactions>0){
+      compactionPill.textContent=`🗜 ${t('contextCompactionCount',{n:compactions})}`;
+      compactionPill.title=t('contextCompactionsTitle',{n:compactions});
+    }
+  }
   $('context-fill').style.width=hasCapacity?`${Math.min(1,context.usedFraction)*100}%`:'0%';
-  $('context-fill').style.background=hasCapacity&&context.usedFraction>=.9?'var(--pulse-danger)':'';
+  $('context-fill').style.background=hasCapacity&&context.usedFraction>=.9?'var(--pulse-danger)':hasCapacity&&context.usedFraction>=.75?'var(--pulse-warning)':'';
   if(hasCapacity){$('context-track').setAttribute('aria-valuenow',String(Math.min(100,context.usedFraction*100)));$('context-track').setAttribute('aria-valuemin','0');$('context-track').setAttribute('aria-valuemax','100');}else $('context-track').removeAttribute('aria-valuenow');
   text('strip-cache',percent(cache?.hitRate));text('cache-rate',percent(cache?.hitRate));
   const tokens=usage?.tokens || cache;
@@ -524,7 +528,7 @@ $('refresh-button').addEventListener('click', refreshManually);
 languagePicker=language.mountLanguagePicker({button:$('language-toggle'),parent:document.body,choose:value=>preferences.choose(value)});
 for(const button of document.querySelectorAll('[data-speed-style-choice]'))button.addEventListener('click',()=>void speedStyle.choose(button.dataset.speedStyleChoice));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-window.addEventListener('pagehide',()=>{preferences.dispose();languagePicker.close(false);});
+window.addEventListener('pagehide',()=>{preferences.dispose();speedStyle.dispose();languagePicker.close(false);});
 window.addEventListener('pageshow',event=>{if(event.persisted)preferences=connectPreferences();});
 setInterval(updateCountdowns,1000);
 applySpeedStyle();

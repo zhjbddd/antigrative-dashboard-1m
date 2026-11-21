@@ -89,9 +89,29 @@ export class AppUpdater{
  constructor({pluginDir,dataDir,worker=join(pluginDir,'compat','update-worker.py'),run=runUpdateWorker,onReload=null,now=Date.now}={}){
   this.pluginDir=resolve(pluginDir);this.dataDir=join(resolve(dataDir),'updates');this.worker=resolve(worker);this.run=run;this.onReload=onReload;this.now=now;
  }
- state={state:'idle',host:'app',currentVersion:null};plan=null;checkPending=null;applyPending=null;job=null;lastCheck=0;
+ state={state:'idle',host:'app',currentVersion:null};plan=null;checkPending=null;passivePending=null;applyPending=null;job=null;lastCheck=0;lastPassiveCheck=0;
  publicState(){const {state,host,currentVersion,latestVersion,notes,error,errorDetail,progress}=this.state;return {state,host,currentVersion,latestVersion,notes,error,errorDetail,progress};}
+ passiveSummary(){return this.state.state==='available'?{available:true,latestVersion:this.state.latestVersion||null}:{available:false,latestVersion:null};}
  async current(){const m=JSON.parse(await readFile(join(this.pluginDir,'plugin.json'),'utf8'));if(m.name!=='antigravity-pulse'||!/^\d+\.\d+\.\d+$/.test(m.version))throw Error('verification');return m.version;}
+ async checkPassive({minIntervalMs=6*60*60*1000}={}){
+  if(this.job||this.applyPending||this.checkPending||['checking','installing','installed','reloading'].includes(this.state.state))return this.passiveSummary();
+  if(this.passivePending)return this.passivePending;
+  if(this.lastPassiveCheck&&this.now()-this.lastPassiveCheck<minIntervalMs)return this.passiveSummary();
+  this.passivePending=(async()=>{
+   try{
+    const current=await this.current();
+    const result=await this.run(this.worker,['check','--target',this.pluginDir]);
+    if(result?.host!=='app'||result.currentVersion!==current)return this.passiveSummary();
+    if(this.job||this.applyPending||this.checkPending||['checking','installing','installed','reloading'].includes(this.state.state))return this.passiveSummary();
+    this.plan=result.hasUpdate?{...result,expires:this.now()+15*60*1000}:null;
+    this.state={state:result.hasUpdate?'available':'current',host:'app',currentVersion:result.currentVersion,latestVersion:result.latestVersion,notes:typeof result.notes==='string'?result.notes.slice(0,1800):''};
+    this.lastCheck=this.now();
+   }catch{}
+   finally{this.lastPassiveCheck=this.now();this.passivePending=null;}
+   return this.passiveSummary();
+  })();
+  return this.passivePending;
+ }
  async check(){
   if(this.job||this.applyPending||['installed','reloading'].includes(this.state.state))return this.publicState();if(this.checkPending)return this.checkPending;
   if(this.lastCheck&&this.now()-this.lastCheck<15000&&['current','available'].includes(this.state.state))return this.publicState();

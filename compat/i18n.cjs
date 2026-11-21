@@ -14,6 +14,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       taskOwn:'Current agent',taskSubagents:'Subagents ({n})',taskLoading:'Summing subagents…',taskPartial:'Some subagents unavailable',taskCurrentOnly:'Current agent only; subagent statistics unavailable.',
       transcriptTitle:'Recorded text estimate',transcriptUser:'User text',transcriptAssistant:'Replies + thinking',transcriptTool:'Tool output',transcriptSystem:'System text',transcriptMarkers:'Compaction markers',transcriptImages:'Image-generation steps',transcriptPartial:'partial',transcriptLoading:'Loading…',transcriptUnavailable:'Unavailable',transcriptSaved:'saved',transcriptBasis:'Estimated logged text, not active context or billed usage. Hidden prompts, media and tool-call arguments are excluded.',
       contextHostLimit:'Active window (host)',contextProviderCapacity:'Provider capacity reference',contextCompressionLimit:'Compaction threshold',contextLimitUnknown:'Unknown',contextReferenceBasis:'Provider specification; not this session\'s available capacity.',
+      contextCompactions:'Compactions',contextCompactionCount:'{n}×',contextCompactionsTitle:'Context compactions recorded in this conversation: {n}',
       context:'Context window',contextShort:'Ctx',contextUsed:'{used}% used',contextTokens:'{used} / {max} toks',contextUnknown:'Context capacity unavailable',contextUnavailable:'Context statistics are unavailable for this request.',contextBasis:'Host estimate at the latest request start; not cumulative tokens or a live streaming counter.',contextModel:'Sampled model',contextLimit:'Window capacity',contextUsage:'Used tokens (estimate)',contextSaved:'Showing saved context statistics ({time}).',contextExceeded:'The host estimate exceeds the reported capacity.',
       savedStats:'Showing saved conversation statistics ({time}).',saveFailed:'Statistics could not be saved locally.',
       strip:'Antigrative Dashboard statistics',session:'Session statistics',cache:'Cache hit',cacheTitle:'Token usage',five:'Five-hour quota',week:'Weekly quota',weekShort:'Wk',
@@ -49,12 +50,13 @@ module.exports = function createDashboardI18n(initialLanguage) {
       taskOwn:'当前代理',taskSubagents:'子代理（{n}）',taskLoading:'正在汇总子代理…',taskPartial:'部分子代理暂不可读取',taskCurrentOnly:'仅当前代理；子代理统计暂不可用',
       transcriptTitle:'已记录文本估算',transcriptUser:'用户文本',transcriptAssistant:'回复与思考',transcriptTool:'工具输出',transcriptSystem:'系统文本',transcriptMarkers:'压缩标记记录',transcriptImages:'图像生成步骤',transcriptPartial:'不完整',transcriptLoading:'读取中…',transcriptUnavailable:'不可用',transcriptSaved:'已保存',transcriptBasis:'日志文本估算，非当前上下文或计费用量。不含隐藏提示、媒体和工具调用参数。',
       contextHostLimit:'当前窗口容量（宿主）',contextProviderCapacity:'供应商容量参考',contextCompressionLimit:'压缩触发阈值',contextLimitUnknown:'未知',contextReferenceBasis:'供应商规格参考，不代表当前会话可用容量。',
+      contextCompactions:'已压缩',contextCompactionCount:'{n} 次',contextCompactionsTitle:'当前会话已记录的上下文压缩次数：{n} 次',
       context:'上下文窗口',contextShort:'上下文',contextUsed:'{used}% 已用',contextTokens:'{used} / {max} toks',contextUnknown:'上下文容量不可用',contextUnavailable:'此请求暂无可用上下文统计。',contextBasis:'宿主在最近请求开始时的估计值，非累计 Token，也非流式实时计数。',contextModel:'采样模型',contextLimit:'窗口容量',contextUsage:'已用 Token（估计）',contextSaved:'显示已保存的上下文统计（{time}）。',contextExceeded:'宿主估计值超过返回的窗口容量。',
       savedStats:'显示已保存的会话统计（{time}）。',saveFailed:'统计暂时无法保存到本地。',
       strip:'Antigrative Dashboard 会话与额度状态条',session:'会话统计',cache:'缓存命中',cacheTitle:'Token 用量',five:'5h 额度',week:'周额度',weekShort:'周',
       modelTime:'模型调用用时',toolTime:'工具调用用时',ttft:'首 token 平均（TTFT）',ttftShort:'首字耗时',latestSpeed:'最新速度',sessionAvg:'会话平均',peakSpeed:'峰值',basisShortResponse:'正文输出',basisShortAll:'总输出',sessionTps:'会话输出速率（TPS）',latest:'最近一次请求',tokens:'正文 / 思考输出',remaining:'剩余',
       resetIn:'重置倒计时',resetTime:'重置时间（北京时间）',group:'额度组',selectGroup:'选择额度组',refresh:'刷新额度',refreshStats:'刷新统计',refreshing:'正在刷新…',
-      speedStyle:'速度卡样式',styleMinimal:'简约',styleCat:'像素猫',styleSaveFailed:'样式设置暂时无法保存，请重试。',outlookOk:'额度充裕',outlookTight:'额度偏紧',outlookExhaust:'重置前耗尽',paceIdle:'暂未消耗',forecastLeft:'预计重置时剩 ~{pct}',forecastDepletes:'约 {eta} 后耗尽，比重置早 {early}',forecastWarming:'已耗 {pct} · 采样预热中',forecastBasis:'剩余额度 {remaining} · 剩余时间 {time} · 按本窗口平均消耗线性推算',
+      speedStyle:'速度卡样式',styleMinimal:'简约',styleCat:'像素猫',styleSaveFailed:'样式设置暂时无法保存，请重试。',outlookOk:'额度充裕',outlookTight:'额度偏紧',outlookExhaust:'重置前耗尽',paceIdle:'暂未消耗',forecastLeft:'预计重置时剩 ~{pct}',forecastDepletes:'预计 {eta} 后耗尽、比重置早 {early}',forecastWarming:'已耗 {pct} · 采样预热中',forecastBasis:'剩余额度 {remaining} · 剩余时间 {time} · 按本窗口平均消耗线性推算',
       waiting:'等待刷新',connecting:'连接 Antigravity…',waitingApp:'等待 Antigravity',waitingModel:'等待模型生成',waitingRequest:'尚无请求',hover:'悬停状态条，查看详细统计',autoConnect:'打开应用后自动连接',loadingQuota:'读取额度…',unavailableQuota:'额度暂不可用',
       live:'已连接 Antigrative Dashboard',stale:'显示上次成功读取的额度',offline:'Antigrative Dashboard 暂未连接',
       responseBasis:'统计方式：正文 Token ÷ 流式时长；会话 TPS 按总时长加权。',allBasis:'统计方式：输出 Token ÷ 流式时长；此模型未拆分正文与思考。',
@@ -81,12 +83,13 @@ module.exports = function createDashboardI18n(initialLanguage) {
       taskOwn:'目前代理',taskSubagents:'子代理（{n}）',taskLoading:'正在彙總子代理…',taskPartial:'部分子代理暫時無法讀取',taskCurrentOnly:'僅目前代理；子代理統計暫時無法取得',
       transcriptTitle:'已記錄文字預估',transcriptUser:'使用者文字',transcriptAssistant:'回覆與思考過程',transcriptTool:'工具輸出',transcriptSystem:'系統文字',transcriptMarkers:'壓縮標記記錄',transcriptImages:'圖片生成步驟',transcriptPartial:'部分記錄',transcriptLoading:'載入中…',transcriptUnavailable:'無法提供',transcriptSaved:'已儲存',transcriptBasis:'依記錄文字推算之預估值，非作用中上下文或計費用量。不含隱藏提示詞、媒體檔案與工具呼叫引數。',
       contextHostLimit:'目前視窗容量（宿主環境）',contextProviderCapacity:'供應商規格容量參考',contextCompressionLimit:'觸發壓縮門檻',contextLimitUnknown:'未知',contextReferenceBasis:'模型供應商規格參考值，不代表目前對話的可用容量。',
+      contextCompactions:'已壓縮',contextCompactionCount:'{n} 次',contextCompactionsTitle:'目前對話已記錄的上下文壓縮次數：{n} 次',
       context:'上下文視窗',contextShort:'上下文',contextUsed:'{used}% 已使用',contextTokens:'{used} / {max} toks',contextUnknown:'目前無法取得上下文容量',contextUnavailable:'此請求目前無法取得上下文統計資料。',contextBasis:'宿主環境於最近一次請求發起時的預估值，非累計 Token，亦非串流即時計數。',contextModel:'取樣模型',contextLimit:'視窗容量',contextUsage:'已用 Token（預估）',contextSaved:'顯示已儲存的上下文統計資料（{time}）。',contextExceeded:'宿主預估值已超過回傳的視窗容量。',
       savedStats:'顯示已儲存的對話統計資料（{time}）。',saveFailed:'統計資料暫時無法儲存至本機。',
       strip:'Antigrative Dashboard 對話與配額狀態列',session:'工作階段統計',cache:'快取命中',cacheTitle:'Token 用量',five:'5 小時配額',week:'每週配額',weekShort:'週',
       modelTime:'模型呼叫耗時',toolTime:'工具呼叫耗時',ttft:'首字回應平均時間 (TTFT)',ttftShort:'首字耗時',latestSpeed:'最新速率',sessionAvg:'階段平均',peakSpeed:'峰值',basisShortResponse:'回覆輸出',basisShortAll:'總輸出',sessionTps:'連線階段輸出速率 (TPS)',latest:'最近一次請求',tokens:'回覆內文 / 思考輸出',remaining:'剩餘',
       resetIn:'重設倒數',resetTime:'重設時間 (UTC+8)',group:'配額群組',selectGroup:'選取配額群組',refresh:'重新整理配額',refreshStats:'重新整理統計',refreshing:'正在重新整理…',
-      speedStyle:'速度卡樣式',styleMinimal:'簡約',styleCat:'像素貓',styleSaveFailed:'樣式設定暫時無法儲存，請重試。',outlookOk:'配額充裕',outlookTight:'配額偏緊',outlookExhaust:'重設前耗盡',paceIdle:'暫未消耗',forecastLeft:'預計重設時剩 ~{pct}',forecastDepletes:'約 {eta} 後耗盡，比重設早 {early}',forecastWarming:'已耗 {pct} · 取樣預熱中',forecastBasis:'剩餘配額 {remaining} · 剩餘時間 {time} · 依本週期平均消耗線性推算',
+      speedStyle:'速度卡樣式',styleMinimal:'簡約',styleCat:'像素貓',styleSaveFailed:'樣式設定暫時無法儲存，請重試。',outlookOk:'配額充裕',outlookTight:'配額偏緊',outlookExhaust:'重設前耗盡',paceIdle:'暫未消耗',forecastLeft:'預計重設時剩 ~{pct}',forecastDepletes:'預計 {eta} 後耗盡、比重設早 {early}',forecastWarming:'已耗 {pct} · 取樣預熱中',forecastBasis:'剩餘配額 {remaining} · 剩餘時間 {time} · 依本週期平均消耗線性推算',
       waiting:'等待重新整理',connecting:'連線至 Antigravity…',waitingApp:'等待 Antigravity',waitingModel:'等待模型生成',waitingRequest:'尚無請求',hover:'將游標移至狀態列可檢視詳細統計',autoConnect:'開啟應用程式後將自動連線',loadingQuota:'讀取配額中…',unavailableQuota:'配額暫時無法取得',
       live:'已連線至 Antigrative Dashboard',stale:'顯示前次成功讀取的配額',offline:'Antigrative Dashboard 尚未連線',
       responseBasis:'統計方式：回覆 Token ÷ 串流耗時；連線階段 TPS 依總時長加權計算。',allBasis:'統計方式：輸出 Token ÷ 串流耗時；此模型未區分回覆與思考過程。',
@@ -125,68 +128,53 @@ module.exports = function createDashboardI18n(initialLanguage) {
   }
   function errorMessage(value){
     if(!value)return '';
-    const key=Object.keys(dictionary.en).find(key=>dictionary.en[key]===value);
+    const text=String(value);
+    const key=Object.keys(dictionary.en).find(key=>dictionary.en[key]===text);
     if(key)return t(key);
-    if(language==='zh-CN')return value;
-    if(language==='zh-TW'){
-      const twErrors={
-        '请先打开 Antigravity':'請先開啟 Antigravity','当前采集适配器支持 Windows':'目前收集配接器僅支援 Windows',
-        '检测到多个 Antigravity 实例，请保留一个':'偵測到多個 Antigravity 執行個體，請保留一個',
-        '未找到 Antigravity 桌面后台':'找不到 Antigravity 桌面背景程式',
-        '当前版本未提供可用的本地检测凭据':'目前版本未提供可用的本機檢測憑證',
-        '等待 Antigravity 本地接口启动':'等待 Antigravity 本機 API 啟動',
-        '未找到 Antigravity 语言服务日志，请检查日志路径':'找不到 Antigravity 語言伺服器記錄，請檢查記錄路徑',
-        '会话暂时没有可用统计':'此對話暫無可用統計資料',
-        '完整会话统计分页暂不可用':'完整對話統計分頁暫時無法取得',
-        '会话统计数据超过内存预算':'對話統計資料超出記憶體預算',
-        '会话统计数据超过采集上限':'對話統計資料超出收集上限',
-        '会话统计字段超过采集上限':'對話統計欄位超出收集上限',
-        '会话统计分页读取超时':'對話統計分頁讀取逾時',
-        '会话统计分页数量无效':'對話統計分頁數量無效',
-        '会话统计分页格式无效':'對話統計分頁格式無效',
-        '会话仍在更新，请等待下一次刷新':'對話仍在更新中，請等待下一次重新整理',
-        '接口响应超过采集上限':'API 回應超出收集上限',
-        'Antigravity 接口返回了无法解析的数据':'Antigravity API 回傳了無法解析的資料',
-        'Antigravity 本地接口超时':'Antigravity 本機 API 連線逾時',
-        '会话标识无效':'對話識別碼無效',
-        '等待 Antigrative Dashboard 后台启动':'等待 Antigrative Dashboard 背景程式啟動',
-        '等待 Antigrative Dashboard 重新连接':'等待 Antigrative Dashboard 重新連線',
-        '等待 AG Pulse 后台启动':'等待 AG Pulse 背景程式啟動',
-        '等待 AG Pulse 重新连接':'等待 AG Pulse 重新連線',
-      };
-      if(twErrors[value])return twErrors[value];
-      const match=String(value).match(/^Antigravity 接口 (\w+) 返回 (\d+)$/);
-      if(match)return `Antigravity API ${match[1]} 回傳 HTTP ${match[2]}`;
-      return t('panelUnavailable');
-    }
-    const errors={
-      '请先打开 Antigravity':'Open Antigravity to connect.', '当前采集适配器支持 Windows':'This collector requires Windows.',
-      '检测到多个 Antigravity 实例，请保留一个':'Multiple Antigravity instances detected. Keep one open.',
-      '未找到 Antigravity 桌面后台':'Antigravity desktop backend was not found.',
-      '当前版本未提供可用的本地检测凭据':'Local metrics credentials are unavailable in this version.',
-      '等待 Antigravity 本地接口启动':'Waiting for the local Antigravity API.',
-      '未找到 Antigravity 语言服务日志，请检查日志路径':'Antigravity language-server log was not found. Check the log path.',
-      '会话暂时没有可用统计':'No statistics are available for this conversation yet.',
-      '完整会话统计分页暂不可用':'Complete conversation statistics are temporarily unavailable.',
-      '会话统计数据超过内存预算':'Conversation statistics exceed the memory budget.',
-      '会话统计数据超过采集上限':'Retained conversation statistics exceed the collection budget.',
-      '会话统计字段超过采集上限':'A statistics field exceeds the collection budget.',
-      '会话统计分页读取超时':'Conversation statistics pagination timed out.',
-      '会话统计分页数量无效':'Invalid conversation statistics page count.',
-      '会话统计分页格式无效':'Invalid conversation statistics page format.',
-      '会话仍在更新，请等待下一次刷新':'The conversation is updating; waiting for the next refresh.',
-      '接口响应超过采集上限':'The API response exceeds the collection budget.',
-      'Antigravity 接口返回了无法解析的数据':'Antigravity returned an invalid response.',
-      'Antigravity 本地接口超时':'The local Antigravity API timed out.',
-      '会话标识无效':'Invalid conversation identifier.',
-      '等待 Antigrative Dashboard 后台启动':'Waiting for the dashboard background process.',
-      '等待 Antigrative Dashboard 重新连接':'Waiting for the dashboard to reconnect.',
-      '等待 AG Pulse 后台启动':'Waiting for the dashboard background process.',
-      '等待 AG Pulse 重新连接':'Waiting for the dashboard to reconnect.',
+    const known={
+      '请先打开 Antigravity':{tw:'請先開啟 Antigravity',en:'Open Antigravity to connect.'},
+      '当前采集适配器支持 Windows':{tw:'目前收集配接器僅支援 Windows',en:'This collector requires Windows.'},
+      '检测到多个 Antigravity 实例，请保留一个':{tw:'偵測到多個 Antigravity 執行個體，請保留一個',en:'Multiple Antigravity instances detected. Keep one open.'},
+      '未找到 Antigravity 桌面后台':{tw:'找不到 Antigravity 桌面背景程式',en:'Antigravity desktop backend was not found.'},
+      '读取 Antigravity 进程信息超时':{tw:'讀取 Antigravity 處理程序資訊逾時',en:'Timed out reading Antigravity process information.'},
+      '无法读取 Antigravity 进程信息':{tw:'無法讀取 Antigravity 處理程序資訊',en:'Unable to read Antigravity process information.'},
+      '当前版本未提供可用的本地检测凭据':{tw:'目前版本未提供可用的本機檢測憑證',en:'Local metrics credentials are unavailable in this version.'},
+      '等待 Antigravity 本地接口启动':{tw:'等待 Antigravity 本機 API 啟動',en:'Waiting for the local Antigravity API.'},
+      '未找到 Antigravity 语言服务日志，请检查日志路径':{tw:'找不到 Antigravity 語言伺服器記錄，請檢查記錄路徑',en:'Antigravity language-server log was not found. Check the log path.'},
+      '后台已重新连接，请等待刷新':{tw:'背景程式已重新連線，請等待重新整理',en:'Backend reconnected; waiting for refresh.'},
+      '会话暂时没有可用统计':{tw:'此對話暫無可用統計資料',en:'No statistics are available for this conversation yet.'},
+      '完整会话统计分页暂不可用':{tw:'完整對話統計分頁暫時無法取得',en:'Complete conversation statistics are temporarily unavailable.'},
+      '会话统计数据超过内存预算':{tw:'對話統計資料超出記憶體預算',en:'Conversation statistics exceed the memory budget.'},
+      '会话统计数据超过采集上限':{tw:'對話統計資料超出收集上限',en:'Retained conversation statistics exceed the collection budget.'},
+      '会话统计字段超过采集上限':{tw:'對話統計欄位超出收集上限',en:'A statistics field exceeds the collection budget.'},
+      '会话统计分页读取超时':{tw:'對話統計分頁讀取逾時',en:'Conversation statistics pagination timed out.'},
+      '会话统计分页数量无效':{tw:'對話統計分頁數量無效',en:'Invalid conversation statistics page count.'},
+      '会话统计分页格式无效':{tw:'對話統計分頁格式無效',en:'Invalid conversation statistics page format.'},
+      '会话仍在更新，请等待下一次刷新':{tw:'對話仍在更新中，請等待下一次重新整理',en:'The conversation is updating; waiting for the next refresh.'},
+      '接口响应超过采集上限':{tw:'API 回應超出收集上限',en:'The API response exceeds the collection budget.'},
+      'Antigravity 接口返回了无法解析的数据':{tw:'Antigravity API 回傳了無法解析的資料',en:'Antigravity returned an invalid response.'},
+      'Antigravity 本地接口超时':{tw:'Antigravity 本機 API 連線逾時',en:'The local Antigravity API timed out.'},
+      '会话标识无效':{tw:'對話識別碼無效',en:'Invalid conversation identifier.'},
+      '等待 Antigrative Dashboard 后台启动':{tw:'等待 Antigrative Dashboard 背景程式啟動',en:'Waiting for the dashboard background process.'},
+      '等待 Antigrative Dashboard 重新连接':{tw:'等待 Antigrative Dashboard 重新連線',en:'Waiting for the dashboard to reconnect.'},
+      '等待 AG Pulse 后台启动':{tw:'等待 AG Pulse 背景程式啟動',en:'Waiting for the dashboard background process.'},
+      '等待 AG Pulse 重新连接':{tw:'等待 AG Pulse 重新連線',en:'Waiting for the dashboard to reconnect.'},
     };
-    if(errors[value])return errors[value];
-    const match=String(value).match(/^Antigravity 接口 (\w+) 返回 (\d+)$/);
-    return match?`Antigravity ${match[1]} returned HTTP ${match[2]}.`:'Statistics are temporarily unavailable.';
+    const ideKnown={
+      'Timed out reading Antigravity IDE processes':{zh:'读取 Antigravity IDE 进程信息超时',tw:'讀取 Antigravity IDE 處理程序資訊逾時',en:'Timed out reading Antigravity IDE processes.'},
+      'Unable to read Antigravity IDE processes':{zh:'无法读取 Antigravity IDE 进程信息',tw:'無法讀取 Antigravity IDE 處理程序資訊',en:'Unable to read Antigravity IDE processes.'},
+      'Waiting for Antigravity IDE processes':{zh:'等待 Antigravity IDE 进程启动',tw:'等待 Antigravity IDE 處理程序啟動',en:'Waiting for Antigravity IDE processes.'},
+      'Waiting for the IDE main language server':{zh:'等待 Antigravity IDE 语言服务启动',tw:'等待 Antigravity IDE 語言伺服器啟動',en:'Waiting for the IDE main language server.'},
+      'Waiting for the IDE local API port':{zh:'等待 Antigravity IDE 本地接口启动',tw:'等待 Antigravity IDE 本機 API 啟動',en:'Waiting for the IDE local API port.'},
+      'IDE local API credential unavailable':{zh:'当前 IDE 版本未提供可用的本地检测凭据',tw:'目前 IDE 版本未提供可用的本機檢測憑證',en:'IDE local API credential unavailable.'},
+      'IDE renderer port does not belong to Antigravity IDE':{zh:'当前调试端口不属于 Antigravity IDE',tw:'目前偵錯連接埠不屬於 Antigravity IDE',en:'IDE renderer port does not belong to Antigravity IDE.'},
+      'Multiple Antigravity IDE instances own the renderer port':{zh:'检测到多个 Antigravity IDE 实例共用同一端口',tw:'偵測到多個 Antigravity IDE 執行個體共用同一連接埠',en:'Multiple Antigravity IDE instances own the renderer port.'},
+    };
+    if(known[text])return language==='zh-CN'?text:language==='zh-TW'?known[text].tw:known[text].en;
+    if(ideKnown[text])return language==='zh-CN'?ideKnown[text].zh:language==='zh-TW'?ideKnown[text].tw:ideKnown[text].en;
+    const match=text.match(/^Antigravity 接口 (\w+) 返回 (\d+)$/);
+    if(match)return language==='zh-CN'?text:language==='zh-TW'?`Antigravity API ${match[1]} 回傳 HTTP ${match[2]}`:`Antigravity ${match[1]} returned HTTP ${match[2]}.`;
+    return language==='en'?'Statistics are temporarily unavailable.':t('panelUnavailable');
   }
   function connectPreferences({read,write,cache=()=>{},changed=()=>{}}) {
     let epoch=0,writes=0,revision=-1,disposed=false,error=false,queue=Promise.resolve();
