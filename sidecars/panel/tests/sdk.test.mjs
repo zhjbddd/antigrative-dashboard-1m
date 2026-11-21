@@ -103,5 +103,5 @@ test('extractBundledSdkFromFile handles >4 MiB binaries straddling chunk boundar
  const loaded=await loadBundledSdk({executable:exe,directory:join(directory,'cache')});
  assert.equal(typeof loaded.SidecarApp,'function');
  const sidecarConfig=JSON.parse(await readFile(new URL('../sidecar.json',import.meta.url),'utf8'));
- assert.deepEqual(sidecarConfig.args,['--max-old-space-size=192','main.mjs']);
+ assert.deepEqual(sidecarConfig.args,['--max-old-space-size=512','main.mjs']);
 });

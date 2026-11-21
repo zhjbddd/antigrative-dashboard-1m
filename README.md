@@ -11,8 +11,9 @@
    - 本增强版在模型具备经校验的 `1,048,576`（1M）或更高目录容量时，自动将上下文分母升级为模型真实物理容量（`1M`），同时保留原始 `hostMaxTokens` 字段供参考，并对缺失/非法宿主计数保持安全 `null` 处理。
 2. **新增 `GetAvailableModels` 动态模型目录同步**：
    - 在配额刷新时自动从本地 Language Server 同步 `GetAvailableModels`，未来 Antigravity 新增模型及上下文容量无需手动改代码即可自动识别。
-3. **补齐最新模型与占位符映射**：
+3. **补齐最新模型与占位符映射，并扩容 Sidecar 内存上限至 `512MB`**：
    - 完整支持 `Orchestrator (Carbon)` / `Orchestrator (Argon)`、`Gemini 4 Hydrogen (Orchestrator)`、`Gemini 4 Carbon / Argon / Hydrogen`（含 `tiered-*`）、`Gemini 3 Flash`、`Gemini 3.5 Flash Lite`、`Gemini 3.1 Flash Lite/Image`、`Gemini 2.5 Pro/Flash` 等最新目录模型及配额分组识别。
+   - 将后台 Sidecar 的 V8 堆内存上限由 `192MB` 提升至 `512MB`（`--max-old-space-size=512`），消除 1M 超长会话扫描轨迹时因堆内存不足触发的自重启闪烁。
 4. **完整保留上游 `v0.9.7` 全部能力**：
    - Antigravity Desktop `2.34.0+` daemon 凭据双校验读取（`~/.gemini/antigravity/daemon/*.json`，兼容移除 `--csrf_token` 的新版）与 `2.33.0+` 快捷方式调试端口自愈
    - 上下文压缩次数徽标、`75%` / `90%` 容量预警分档、非侵入式版本更新提示
