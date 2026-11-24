@@ -74,8 +74,7 @@ export function safeMetrics(value, conversationId) {
   for (const key of ['speedSavedAt','cacheSavedAt','lastActiveAt']) result[key] = typeof value[key] === 'string' && Number.isFinite(Date.parse(value[key])) ? new Date(value[key]).toISOString() : null;
   result.recentTps = Array.isArray(value.recentTps) ? value.recentTps.filter(v => number(v) && v > 0).slice(-16).map(v => Math.round(v * 10) / 10) : [];
   result.rateBasis = value.rateBasis === 'response' ? 'response' : 'all-output';
-  const formattedModel = typeof value.model === 'string' ? formatModelName(value.model) : null;
-  result.model = formattedModel ? formattedModel.slice(0,256) : null;
+  result.model = typeof value.model === 'string' ? (formatModelName(value.model) || value.model).slice(0,256) : null;
   result.status = typeof value.status === 'string' && /^[A-Z0-9_]+$/.test(value.status) ? value.status : null;
   result.context = safeContext(value.context) || null;
   const task=safeTaskUsage(value.taskUsage);

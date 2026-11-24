@@ -20,7 +20,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       strip:'Antigrative Dashboard statistics',session:'Session statistics',cache:'Cache hit',cacheTitle:'Token usage',five:'Five-hour quota',week:'Weekly quota',weekShort:'Wk',
       modelTime:'Model time',toolTime:'Tool time',ttft:'Average TTFT',ttftShort:'TTFT',latestSpeed:'Latest speed',sessionAvg:'Session avg',peakSpeed:'Peak',basisShortResponse:'Response',basisShortAll:'Output',sessionTps:'Session TPS',latest:'Last request',tokens:'Response / thinking',remaining:'remaining',
       resetIn:'Resets in',resetTime:'Reset time (UTC+8)',group:'Quota group',selectGroup:'Select quota group',refresh:'Refresh quota',refreshStats:'Refresh statistics',refreshing:'Refreshing…',
-      speedStyle:'Speed card style',styleMinimal:'Minimal',styleCat:'Pixel cat',styleSaveFailed:'Style could not be saved. Try again.',outlookOk:'Comfortable',outlookTight:'Tight',outlookExhaust:'Runs out early',paceIdle:'Unused',forecastLeft:'~{pct} left at reset',forecastDepletes:'Runs out in ~{eta}, {early} before reset',forecastWarming:'Used {pct} · warming up',forecastBasis:'{remaining} quota left · {time} of the window left · linear projection from this window\'s average usage',
+      speedStyle:'Speed card style',styleMinimal:'Minimal',styleCat:'Pixel cat',styleSaveFailed:'Style could not be saved. Try again.',stripMode:'Inline bar display',stripFull:'Full bar',stripMinimal:'Minimal bar',stripCollapse:'Collapse to minimal bar',stripExpand:'Expand full bar',stripModeSaveFailed:'Display mode could not be saved. Try again.',outlookOk:'Comfortable',outlookTight:'Tight',outlookExhaust:'Runs out early',paceIdle:'Unused',forecastLeft:'~{pct} left at reset',forecastDepletes:'Runs out in ~{eta}, {early} before reset',forecastWarming:'Used {pct} · warming up',forecastBasis:'{remaining} quota left · {time} of the window left · linear projection from this window\'s average usage',
       waiting:'Waiting for refresh',connecting:'Connecting to Antigravity…',waitingApp:'Waiting for Antigravity',waitingModel:'Waiting for a model request',waitingRequest:'No requests yet',
       hover:'Hover over the strip for details',autoConnect:'Open the app to connect automatically',loadingQuota:'Loading quota…',unavailableQuota:'Quota unavailable',
       live:'Connected to Antigrative Dashboard',stale:'Showing last available quota',offline:'Antigrative Dashboard is offline',
@@ -35,7 +35,10 @@ module.exports = function createDashboardI18n(initialLanguage) {
       cacheBasis:'Cached input ÷ total input, weighted across requests. Cache writes are not hits.',cacheMissing:'{n} requests have unavailable cache statistics.',cacheUnavailable:'Cache statistics are unavailable for this conversation.',
       cacheCoverage:'{measured} of {total} requests',language:'Language',switchLanguage:'Switch to Chinese',languageSaveFailed:'Language preference could not be saved. Please retry.',checkUpdate:'Check for updates',reconnecting:'Waiting to reconnect',panelUnavailable:'The statistics panel cannot connect right now.',invalidData:'Incompatible statistics data',
       usageScopeLocal:'All local',usageScopeAccount:'Current account',quotaWindowUsage:'Window tokens',quotaWindowFullRef:'~{full} full',quotaWindowBasis:'Recorded local tokens for this account in this quota window; estimated full capacity is a proportional reference only (weighting varies by model and cache).',
-      inlineReconnecting:'Inline widget is reconnecting automatically; statistics remain available in this panel.',panelInlineReconnecting:'Inline widget is reconnecting automatically; statistics remain available in this panel.',panelDebugPortReady:'Host started without remote debugging (launch shortcut configured); fully quit and reopen Antigravity for the inline bar. Statistics remain available here.',panelDebugPortManual:'Antigravity 2.33+ requires --remote-debugging-port=0 --remote-debugging-address=127.0.0.1 (or python3 manage.py launch) for the inline bar; statistics remain available here.',missingDebugPort:'Antigravity started without a debug port. Relaunch to restore the inline status bar.',relaunchDebugButton:'Relaunch with Debug Port',relaunchingDebug:'Relaunching Antigravity…',relaunchDebugFailed:'Could not relaunch automatically. Use the Antigravity (Debug) launcher.',relaunchDebugCooldown:'Relaunch already requested; waiting for Antigravity to restart.',relaunchDebugNotRunning:'Antigravity is not running right now.',autoRelaunchLabel:'Auto-relaunch when debug port is missing (e.g. after app update)',autoRelaunchSaveFailed:'Auto-relaunch setting could not be saved.',
+      panelInlineReconnecting:'Inline widget is reconnecting automatically; statistics remain available in this panel.',
+      panelRemoteHub:'Remote SSH/WSL hub: inline bar unavailable; full statistics remain available here.',
+      panelDebugPortReady:'Host started without remote debugging (launch shortcut configured); fully quit and reopen Antigravity for the inline bar. Statistics remain available here.',
+      panelDebugPortManual:'Antigravity 2.33+ requires --remote-debugging-port=0 --remote-debugging-address=127.0.0.1 (or python3 manage.py launch) for the inline bar; statistics remain available here.',
     },
     'zh-CN':{
       collectionBackgroundFailed:'后台暂时无法完成，稍后会自动重试。',collectionProcessing:'正在补全统计',collectionProcessingReason:'后台处理中，可继续使用。',collectionProgress:'查看进度',collectionProgressCounts:'已处理 {steps} 个步骤 · {requests} 条请求记录',collectionQueued:'等待处理',collectionSteps:'读取步骤',collectionGenerators:'读取请求记录',collectionReducing:'计算统计',collectionPublishing:'保存已校验统计',
@@ -56,7 +59,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       strip:'Antigrative Dashboard 会话与额度状态条',session:'会话统计',cache:'缓存命中',cacheTitle:'Token 用量',five:'5h 额度',week:'周额度',weekShort:'周',
       modelTime:'模型调用用时',toolTime:'工具调用用时',ttft:'首 token 平均（TTFT）',ttftShort:'首字耗时',latestSpeed:'最新速度',sessionAvg:'会话平均',peakSpeed:'峰值',basisShortResponse:'正文输出',basisShortAll:'总输出',sessionTps:'会话输出速率（TPS）',latest:'最近一次请求',tokens:'正文 / 思考输出',remaining:'剩余',
       resetIn:'重置倒计时',resetTime:'重置时间（北京时间）',group:'额度组',selectGroup:'选择额度组',refresh:'刷新额度',refreshStats:'刷新统计',refreshing:'正在刷新…',
-      speedStyle:'速度卡样式',styleMinimal:'简约',styleCat:'像素猫',styleSaveFailed:'样式设置暂时无法保存，请重试。',outlookOk:'额度充裕',outlookTight:'额度偏紧',outlookExhaust:'重置前耗尽',paceIdle:'暂未消耗',forecastLeft:'预计重置时剩 ~{pct}',forecastDepletes:'预计 {eta} 后耗尽、比重置早 {early}',forecastWarming:'已耗 {pct} · 采样预热中',forecastBasis:'剩余额度 {remaining} · 剩余时间 {time} · 按本窗口平均消耗线性推算',
+      speedStyle:'速度卡样式',styleMinimal:'简约',styleCat:'像素猫',styleSaveFailed:'样式设置暂时无法保存，请重试。',stripMode:'状态条显示模式',stripFull:'完整状态条',stripMinimal:'极简状态条',stripCollapse:'收起为极简状态条',stripExpand:'展开完整状态条',stripModeSaveFailed:'显示模式暂时无法保存，请重试。',outlookOk:'额度充裕',outlookTight:'额度偏紧',outlookExhaust:'重置前耗尽',paceIdle:'暂未消耗',forecastLeft:'预计重置时剩 ~{pct}',forecastDepletes:'约 {eta} 后耗尽，比重置早 {early}',forecastWarming:'已耗 {pct} · 采样预热中',forecastBasis:'剩余额度 {remaining} · 剩余时间 {time} · 按本窗口平均消耗线性推算',
       waiting:'等待刷新',connecting:'连接 Antigravity…',waitingApp:'等待 Antigravity',waitingModel:'等待模型生成',waitingRequest:'尚无请求',hover:'悬停状态条，查看详细统计',autoConnect:'打开应用后自动连接',loadingQuota:'读取额度…',unavailableQuota:'额度暂不可用',
       live:'已连接 Antigrative Dashboard',stale:'显示上次成功读取的额度',offline:'Antigrative Dashboard 暂未连接',
       responseBasis:'统计方式：正文 Token ÷ 流式时长；会话 TPS 按总时长加权。',allBasis:'统计方式：输出 Token ÷ 流式时长；此模型未拆分正文与思考。',
@@ -68,7 +71,10 @@ module.exports = function createDashboardI18n(initialLanguage) {
       cacheRate:'缓存命中',cacheRead:'缓存读取',cacheInput:'总输入',cacheMiss:'未缓存输入',cacheWrite:'缓存写入',cacheOutput:'输出',cacheBasis:'缓存读取 token ÷ 总输入 token，按请求 token 总量加权；缓存写入不算命中。',cacheMissing:'{n} 次请求缺少缓存统计。',cacheUnavailable:'此会话暂无可用缓存统计。',cacheCoverage:'{measured} / {total} 次请求',
       language:'语言',switchLanguage:'Switch to English',languageSaveFailed:'语言设置暂时无法保存，请重试。',checkUpdate:'检查更新',reconnecting:'等待控件重新连接',panelUnavailable:'统计面板暂时无法连接',invalidData:'统计数据格式不兼容',
       usageScopeLocal:'本机全部',usageScopeAccount:'当前账号',quotaWindowUsage:'周期用量',quotaWindowFullRef:'约 {full} 满额',quotaWindowBasis:'当前账号该额度周期内本机实测流经 Token；估算满额仅作同比例参考（不同模型与缓存折算权重不同）。',
-      inlineReconnecting:'内嵌栏正在自动重连；此面板仍可查看统计。',panelInlineReconnecting:'内嵌栏正在自动重连；此面板仍可查看统计。',panelDebugPortReady:'宿主未开启调试端口（已自动配置启动入口）；请完全退出并从快捷方式重开 Antigravity 以恢复内嵌栏，当前可在此面板查看统计。',panelDebugPortManual:'Antigravity 2.33+ 需带 --remote-debugging-port=0 --remote-debugging-address=127.0.0.1（或运行 python3 manage.py launch）启动以显示内嵌栏；此面板仍可查看统计。',missingDebugPort:'当前 Antigravity 未开启调试端口，无法挂载内嵌状态栏。',relaunchDebugButton:'一键重启并恢复状态栏',relaunchingDebug:'正在重启 Antigravity…',relaunchDebugFailed:'自动重启未能触发，请使用 Antigravity (Debug) 启动器重新打开。',relaunchDebugCooldown:'已发起重启请求，请稍候等待 Antigravity 重新打开。',relaunchDebugNotRunning:'未检测到运行中的 Antigravity 主程序。',autoRelaunchLabel:'缺少调试端口时自动重启恢复（如更新后）',autoRelaunchSaveFailed:'自动重启设置暂时无法保存。',
+      panelInlineReconnecting:'内嵌栏正在自动重连；此面板仍可查看统计。',
+      panelRemoteHub:'远程 SSH/WSL 环境：内嵌栏不可用，此面板仍可正常查看完整统计。',
+      panelDebugPortReady:'宿主未开启调试端口（已自动配置启动入口）；请完全退出并从快捷方式重开 Antigravity 以恢复内嵌栏，当前可在此面板查看统计。',
+      panelDebugPortManual:'Antigravity 2.33+ 需带 --remote-debugging-port=0 --remote-debugging-address=127.0.0.1（或运行 python3 manage.py launch）启动以显示内嵌栏；此面板仍可查看统计。',
     },
     'zh-TW':{
       collectionBackgroundFailed:'背景暫時無法完成，稍後會自動重試。',collectionProcessing:'正在補全統計',collectionProcessingReason:'背景處理中，可繼續使用。',collectionProgress:'查看進度',collectionProgressCounts:'已處理 {steps} 個步驟 · {requests} 筆請求記錄',collectionQueued:'等待處理',collectionSteps:'讀取步驟',collectionGenerators:'讀取請求記錄',collectionReducing:'計算統計',collectionPublishing:'儲存已驗證統計',
@@ -89,7 +95,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       strip:'Antigrative Dashboard 對話與配額狀態列',session:'工作階段統計',cache:'快取命中',cacheTitle:'Token 用量',five:'5 小時配額',week:'每週配額',weekShort:'週',
       modelTime:'模型呼叫耗時',toolTime:'工具呼叫耗時',ttft:'首字回應平均時間 (TTFT)',ttftShort:'首字耗時',latestSpeed:'最新速率',sessionAvg:'階段平均',peakSpeed:'峰值',basisShortResponse:'回覆輸出',basisShortAll:'總輸出',sessionTps:'連線階段輸出速率 (TPS)',latest:'最近一次請求',tokens:'回覆內文 / 思考輸出',remaining:'剩餘',
       resetIn:'重設倒數',resetTime:'重設時間 (UTC+8)',group:'配額群組',selectGroup:'選取配額群組',refresh:'重新整理配額',refreshStats:'重新整理統計',refreshing:'正在重新整理…',
-      speedStyle:'速度卡樣式',styleMinimal:'簡約',styleCat:'像素貓',styleSaveFailed:'樣式設定暫時無法儲存，請重試。',outlookOk:'配額充裕',outlookTight:'配額偏緊',outlookExhaust:'重設前耗盡',paceIdle:'暫未消耗',forecastLeft:'預計重設時剩 ~{pct}',forecastDepletes:'預計 {eta} 後耗盡、比重設早 {early}',forecastWarming:'已耗 {pct} · 取樣預熱中',forecastBasis:'剩餘配額 {remaining} · 剩餘時間 {time} · 依本週期平均消耗線性推算',
+      speedStyle:'速度卡樣式',styleMinimal:'簡約',styleCat:'像素貓',styleSaveFailed:'樣式設定暫時無法儲存，請重試。',stripMode:'狀態列顯示模式',stripFull:'完整狀態列',stripMinimal:'極簡狀態列',stripCollapse:'收合為極簡狀態列',stripExpand:'展開完整狀態列',stripModeSaveFailed:'顯示模式暫時無法儲存，請重試。',outlookOk:'配額充裕',outlookTight:'配額偏緊',outlookExhaust:'重設前耗盡',paceIdle:'暫未消耗',forecastLeft:'預計重設時剩 ~{pct}',forecastDepletes:'約 {eta} 後耗盡，比重設早 {early}',forecastWarming:'已耗 {pct} · 取樣預熱中',forecastBasis:'剩餘配額 {remaining} · 剩餘時間 {time} · 依本週期平均消耗線性推算',
       waiting:'等待重新整理',connecting:'連線至 Antigravity…',waitingApp:'等待 Antigravity',waitingModel:'等待模型生成',waitingRequest:'尚無請求',hover:'將游標移至狀態列可檢視詳細統計',autoConnect:'開啟應用程式後將自動連線',loadingQuota:'讀取配額中…',unavailableQuota:'配額暫時無法取得',
       live:'已連線至 Antigrative Dashboard',stale:'顯示前次成功讀取的配額',offline:'Antigrative Dashboard 尚未連線',
       responseBasis:'統計方式：回覆 Token ÷ 串流耗時；連線階段 TPS 依總時長加權計算。',allBasis:'統計方式：輸出 Token ÷ 串流耗時；此模型未區分回覆與思考過程。',
@@ -101,7 +107,10 @@ module.exports = function createDashboardI18n(initialLanguage) {
       cacheRate:'快取命中率',cacheRead:'快取讀取',cacheInput:'總輸入',cacheMiss:'未快取輸入',cacheWrite:'快取寫入',cacheOutput:'輸出',cacheBasis:'快取讀取 Token ÷ 總輸入 Token，依各請求之 Token 總量加權計算；快取寫入不列入命中。',cacheMissing:'{n} 次請求缺少快取統計資料。',cacheUnavailable:'此對話目前無法取得快取統計資料。',cacheCoverage:'{measured} / {total} 次請求',
       language:'語言',switchLanguage:'Switch to English',languageSaveFailed:'語言設定暫時無法儲存，請再試一次。',checkUpdate:'檢查更新',reconnecting:'等待控制項重新連線',panelUnavailable:'統計面板暫時無法連線',invalidData:'統計資料格式不相容',
       usageScopeLocal:'本機全部',usageScopeAccount:'目前帳號',quotaWindowUsage:'週期用量',quotaWindowFullRef:'約 {full} 滿額',quotaWindowBasis:'目前帳號此配額週期內本機實測流經 Token；預估滿額僅作等比例參考（不同模型與快取換算權重不同）。',
-      inlineReconnecting:'內嵌狀態列正在自動重新連線；此面板仍可檢視統計資料。',panelInlineReconnecting:'內嵌狀態列正在自動重新連線；此面板仍可檢視統計資料。',panelDebugPortReady:'宿主未開啟偵錯連接埠（已自動設定啟動捷徑）；請完全退出並由捷徑重開 Antigravity 以恢復內嵌狀態列，目前可在此面板檢視統計資料。',panelDebugPortManual:'Antigravity 2.33+ 需帶 --remote-debugging-port=0 --remote-debugging-address=127.0.0.1（或執行 python3 manage.py launch）啟動以顯示內嵌狀態列；此面板仍可檢視統計資料。',missingDebugPort:'目前的 Antigravity 未開啟除錯連接埠，無法掛載內嵌狀態列。',relaunchDebugButton:'一鍵重啟並恢復狀態列',relaunchingDebug:'正在重啟 Antigravity…',relaunchDebugFailed:'無法自動觸發重啟，請使用 Antigravity (Debug) 啟動器重新開啟。',relaunchDebugCooldown:'已發起重啟請求，請稍候等待 Antigravity 重新開啟。',relaunchDebugNotRunning:'目前未偵測到執行中的 Antigravity 主程式。',autoRelaunchLabel:'缺少除錯連接埠時自動重啟恢復（如更新後）',autoRelaunchSaveFailed:'自動重啟設定暫時無法儲存。',
+      panelInlineReconnecting:'內嵌狀態列正在自動重新連線；此面板仍可檢視統計資料。',
+      panelRemoteHub:'遠端 SSH/WSL 環境：內嵌狀態列不可用，此面板仍可檢視完整統計資料。',
+      panelDebugPortReady:'宿主未開啟偵錯連接埠（已自動設定啟動捷徑）；請完全退出並由捷徑重開 Antigravity 以恢復內嵌狀態列，目前可在此面板檢視統計資料。',
+      panelDebugPortManual:'Antigravity 2.33+ 需帶 --remote-debugging-port=0 --remote-debugging-address=127.0.0.1（或執行 python3 manage.py launch）啟動以顯示內嵌狀態列；此面板仍可檢視統計資料。',
     },
   };
   let language=initialLanguage==='zh-CN'||initialLanguage==='zh-TW'?initialLanguage:'en';
@@ -129,7 +138,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
   function errorMessage(value){
     if(!value)return '';
     const text=String(value);
-    const key=Object.keys(dictionary.en).find(key=>dictionary.en[key]===text);
+    const key=Object.keys(dictionary.en).find(k=>dictionary.en[k]===text||dictionary['zh-CN'][k]===text||dictionary['zh-TW'][k]===text);
     if(key)return t(key);
     const known={
       '请先打开 Antigravity':{tw:'請先開啟 Antigravity',en:'Open Antigravity to connect.'},
@@ -173,7 +182,10 @@ module.exports = function createDashboardI18n(initialLanguage) {
     if(known[text])return language==='zh-CN'?text:language==='zh-TW'?known[text].tw:known[text].en;
     if(ideKnown[text])return language==='zh-CN'?ideKnown[text].zh:language==='zh-TW'?ideKnown[text].tw:ideKnown[text].en;
     const match=text.match(/^Antigravity 接口 (\w+) 返回 (\d+)$/);
-    if(match)return language==='zh-CN'?text:language==='zh-TW'?`Antigravity API ${match[1]} 回傳 HTTP ${match[2]}`:`Antigravity ${match[1]} returned HTTP ${match[2]}.`;
+    if(match){
+      if(match[2]==='403')return language==='zh-CN'?`Antigravity 当前版本限制访问 ${match[1]} 接口（HTTP 403）`:language==='zh-TW'?`Antigravity 目前版本限制存取 ${match[1]} API（HTTP 403）`:`Antigravity restricted access to ${match[1]} (HTTP 403).`;
+      return language==='zh-CN'?text:language==='zh-TW'?`Antigravity API ${match[1]} 回傳 HTTP ${match[2]}`:`Antigravity ${match[1]} returned HTTP ${match[2]}.`;
+    }
     return language==='en'?'Statistics are temporarily unavailable.':t('panelUnavailable');
   }
   function connectPreferences({read,write,cache=()=>{},changed=()=>{}}) {
@@ -253,8 +265,10 @@ module.exports = function createDashboardI18n(initialLanguage) {
   }
   const SPEED_STYLES=['minimal','cat'];
   const USAGE_SCOPES=['local','account'];
+  const STRIP_MODES=['full','minimal'];
   function normalizeSpeedStyle(value){return SPEED_STYLES.includes(value)?value:'minimal';}
   function normalizeUsageScope(value){return USAGE_SCOPES.includes(value)?value:'local';}
+  function normalizeStripMode(value){return STRIP_MODES.includes(value)?value:'full';}
   function connectSpeedStyle(options){
     const ctrl=connectChoicePreference({key:'speedStyle',allowed:SPEED_STYLES,fallback:'minimal',...options});
     return {sync:ctrl.sync,choose:ctrl.choose,get style(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
@@ -262,6 +276,10 @@ module.exports = function createDashboardI18n(initialLanguage) {
   function connectUsageScope(options){
     const ctrl=connectChoicePreference({key:'usageScope',allowed:USAGE_SCOPES,fallback:'local',...options});
     return {sync:ctrl.sync,choose:ctrl.choose,get scope(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
+  }
+  function connectStripMode(options){
+    const ctrl=connectChoicePreference({key:'stripMode',allowed:STRIP_MODES,fallback:'full',...options});
+    return {sync:ctrl.sync,choose:ctrl.choose,get mode(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
   }
   // Straight-segment sparkline with an end point for the minimal style. Pure
   // geometry so every renderer draws the same shape.
@@ -317,55 +335,16 @@ module.exports = function createDashboardI18n(initialLanguage) {
   // Shared serializable quota presentation policy for App, IDE and sidecar.
   // Bucket IDs can be opaque; labels and automatic selection must agree on
   // the host display name as well. Keep unrelated future groups intact.
-  const quotaModelAliases={
-    model_placeholder_m18:'Gemini 3 Flash',
-    model_placeholder_m21:'Gemini 3.1 Flash Image',
-    model_placeholder_m26:'Claude Opus 4.6 (Thinking)',
-    model_placeholder_m35:'Claude Sonnet 4.6 (Thinking)',
-    model_placeholder_m50:'Gemini 3.1 Flash Lite',
-    model_placeholder_m198:'Gemini 3.5 Flash Lite',
-    model_placeholder_m318:'Gemini 3.8 Flash (High)',
-    model_placeholder_m319:'Gemini 3.8 Flash (Medium)',
-    model_placeholder_m320:'Gemini 3.8 Flash (Low)',
-    model_placeholder_m417:'Gemini 4 Argon (High)',
-    model_placeholder_m418:'Gemini 4 Argon (Medium)',
-    model_placeholder_m419:'Gemini 4 Argon (Low)',
-    model_placeholder_m427:'Gemini 4 Carbon (High)',
-    model_placeholder_m437:'Gemini 4 Carbon (Medium)',
-    model_placeholder_m438:'Gemini 4 Carbon (Low)',
-    model_placeholder_m525:'Gemini 4 Hydrogen (High)',
-    model_placeholder_m526:'Gemini 4 Hydrogen (Medium)',
-    model_placeholder_m527:'Gemini 4 Hydrogen (Low)',
-    model_placeholder_m528:'Gemini 4 Hydrogen (XHigh)',
-    model_placeholder_m530:'Gemini 4 Hydrogen (High)',
-    model_placeholder_m531:'Gemini 4 Hydrogen (XHigh)',
-    model_placeholder_m667:'Orchestrator (Carbon)',
-    model_placeholder_m669:'Gemini 4 Hydrogen (Orchestrator)',
-    model_placeholder_m681:'Orchestrator (Argon)',
-    model_google_gemini_internal_byom:'Gemini (Internal BYOM)',
-    model_openai_gpt_oss_120b_medium:'GPT-OSS 120B (Medium)',
-    'gemini-flash-worker-agy':'Gemini 4 Hydrogen (Orchestrator)',
-    'gemini-pro-orchestrator':'Orchestrator (Carbon)',
-    'gemini-pro-orchestrator-argon':'Orchestrator (Argon)',
-    'gemini-pro-orchestrator-g1-pro':'Orchestrator (Argon)',
-  };
-  function resolveQuotaModelToken(raw) {
-    const trimmed=String(raw||'').trim();
-    if(!trimmed)return '';
-    const direct=quotaModelAliases[trimmed.toLowerCase()];
-    const base=(direct||trimmed).replace(/^word\//i,'').trim();
-    return quotaModelAliases[base.toLowerCase()]||base;
-  }
   function quotaGroupKind(group) {
-    const id=String(group?.id||''),resolvedId=resolveQuotaModelToken(id),resolvedName=resolveQuotaModelToken(group?.name||''),value=id+' '+resolvedId+' '+resolvedName;
+    const id=String(group?.id||''),name=String(group?.name||''),value=id+' '+name;
     if(/(?:^|[^a-z])argon(?:$|[^a-z])/i.test(value))return 'gemini-argon';
-    if(/gemini|hydrogen|carbon|orchestrator/i.test(value))return 'gemini';
-    if(/claude|sonnet|opus|haiku|anthropic|gpt|openai|perplexity|fable/i.test(value)||/(?:^|[^a-z0-9])o[134](?:$|[^a-z0-9])/i.test(value)||/^3p(?:$|[-_])/i.test(id))return '3p';
+    if(/gemini|hydrogen|carbon|neon|orchestrator/i.test(value))return 'gemini';
+    if(/claude|sonnet|opus|haiku|anthropic|gpt|openai/i.test(value)||/(?:^|[^a-z0-9])o[134](?:$|[^a-z0-9])/i.test(value)||/^3p(?:$|[-_])/i.test(id))return '3p';
     return null;
   }
   function quotaGroupLabel(group) {
     if(!group)return '—';
-    return ({'gemini-argon':'Gemini (Argon)',gemini:'Gemini','3p':'Claude'})[quotaGroupKind(group)]||group.name||group.id||t('group');
+    return ({'gemini-argon':'Gemini (Argon)',gemini:'Gemini','3p':'Claude / GPT'})[quotaGroupKind(group)]||group.name||group.id||t('group');
   }
   function chooseQuotaGroup(groups,models,selected) {
     const list=Array.isArray(groups)?groups.filter(g=>g&&typeof g.id==='string'):[];
@@ -443,5 +422,5 @@ module.exports = function createDashboardI18n(initialLanguage) {
     const critical=f.remaining<0.1||(f.willExhaust&&f.exhaustInMs!==null&&f.exhaustInMs<(chosen.w==='5h'?3600000:86400000));
     return {pace:f.outlook,delta:f.paceDelta,window:chosen.w,critical,label,title:`${winLabel} · ${label}`};
   }
-  return {mountLanguagePicker,normalizeSpeedStyle,connectSpeedStyle,normalizeUsageScope,connectUsageScope,minimalTrail,t,rateNote,quotaGroupKind,quotaGroupLabel,chooseQuotaGroup,quotaWindows,quotaRemaining,shortEta,quotaForecast,groupQuotaPace,countdown,elapsed,resetDate,errorMessage,connectPreferences,get language(){return language;},setLanguage(value){language=value==='zh-CN'||value==='zh-TW'?value:'en';if(language!=='en')lastZh=language;},toggle(){language=language==='en'?(lastZh||'zh-TW'):'en';return language;}};
+  return {mountLanguagePicker,normalizeSpeedStyle,connectSpeedStyle,normalizeUsageScope,connectUsageScope,normalizeStripMode,connectStripMode,minimalTrail,t,rateNote,quotaGroupKind,quotaGroupLabel,chooseQuotaGroup,quotaWindows,quotaRemaining,shortEta,quotaForecast,groupQuotaPace,countdown,elapsed,resetDate,errorMessage,connectPreferences,get language(){return language;},setLanguage(value){language=value==='zh-CN'||value==='zh-TW'?value:'en';if(language!=='en')lastZh=language;},toggle(){language=language==='en'?(lastZh||'zh-TW'):'en';return language;}};
 };

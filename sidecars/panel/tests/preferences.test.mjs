@@ -155,19 +155,24 @@ test('usageScope persists independently, defaults cleanly and validates choices'
   scopeCtrl.dispose();
 });
 
-test('autoRelaunchDebug is omitted when unset, validates booleans, and persists independently',async t=>{
+test('stripMode persists independently, defaults to full and validates choices',async t=>{
   const {file,store}=await fixture(t);
-  const initial=await store.get();
-  assert.equal(Object.hasOwn(initial,'autoRelaunchDebug'),false);
-  await store.set({language:'en'});
-  assert.equal(Object.hasOwn(JSON.parse(await readFile(file,'utf8')),'autoRelaunchDebug'),false);
-  for(const bad of [{autoRelaunchDebug:'true'},{autoRelaunchDebug:1},{autoRelaunchDebug:null},{autoRelaunchDebug:{}}])await assert.rejects(store.set(bad));
-  await store.set({autoRelaunchDebug:true});
-  assert.equal((await new PreferencesStore({file}).get()).autoRelaunchDebug,true);
-  await store.set({language:'zh-CN'});
-  assert.equal((await store.get()).autoRelaunchDebug,true);
-  await store.set({autoRelaunchDebug:false});
-  assert.equal((await new PreferencesStore({file}).get()).autoRelaunchDebug,false);
-  await writeFile(file,JSON.stringify({schema:1,language:'en',autoRelaunchDebug:'yes',revision:5}));
-  assert.equal(Object.hasOwn(await store.get(),'autoRelaunchDebug'),false);
+  const language=create(null);
+  assert.equal(language.normalizeStripMode(undefined),'full');
+  assert.equal(language.normalizeStripMode('minimal'),'minimal');
+  assert.equal(language.normalizeStripMode('bad'),'full');
+  await store.set({stripMode:'minimal'});
+  let saved=await new PreferencesStore({file}).get();
+  assert.equal(saved.stripMode,'minimal');assert.equal(saved.language,null);
+  await store.set({language:'zh-CN'});await store.set({stripMode:'full'});
+  saved=await new PreferencesStore({file}).get();
+  assert.equal(saved.stripMode,'full');assert.equal(saved.language,'zh-CN');
+  for(const bad of [{stripMode:'compact'},{stripMode:null},{stripMode:''},{stripMode:'minimal',extra:'x'}])await assert.rejects(store.set(bad));
+  let revision=1,fail=false;
+  const ctrl=language.connectStripMode({initial:'minimal',write:async input=>{if(fail)throw Error('io');return {language:null,stripMode:input.stripMode,revision:++revision};}});
+  assert.equal(ctrl.mode,'minimal');
+  await ctrl.choose('full');assert.equal(ctrl.mode,'full');assert.equal(ctrl.error,false);
+  ctrl.sync({language:null,stripMode:'minimal',revision:1});assert.equal(ctrl.mode,'full','Stale poll must not revert newer choice');
+  fail=true;await ctrl.choose('minimal');assert.equal(ctrl.mode,'minimal');assert.equal(ctrl.error,true);
+  ctrl.dispose();
 });

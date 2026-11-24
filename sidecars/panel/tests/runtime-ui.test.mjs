@@ -184,6 +184,8 @@ test('only trusted preference requests can persist supported language settings',
   await request({languageGuideDismissed:true});assert.deepEqual(writes,[{language:'en'},{languageGuideDismissed:true}]);
   await request({usageGuideDismissed:true},9);await request({usageGuideDismissed:false});assert.equal(writes.length,2);
   await request({usageGuideDismissed:true});assert.deepEqual(writes.at(-1),{usageGuideDismissed:true});
+  await request({stripMode:'minimal'});assert.deepEqual(writes.at(-1),{stripMode:'minimal'});
+  await request({stripMode:'minimal',extra:'nope'});assert.equal(writes.length,4);
   await request({});assert.ok(connection.calls.some(call=>call.params.expression?.includes('"language":"zh-CN"')));await ui.stop();
 });
 
@@ -300,49 +302,96 @@ test('runtime bridge samples host fonts into rendererTheme, allows usageScope an
   assert.deepEqual(ui.rendererTheme,{});
 });
 
-test('ENOENT during discovery marks missing-debug-port, invokes onMissingDebugPort when owned, and clears on recovery',async()=>{
-  const {ui}=fixture();
-  let calls=0,owned=true;
-  ui.owns=async()=>owned;
-  ui.onMissingDebugPort=()=>{calls++;};
-  ui.discover=async()=>{throw Object.assign(new Error('missing DevToolsActivePort'),{code:'ENOENT'});};
-  await ui.tick();
-  assert.equal(ui.health.state,'reconnecting');
-  assert.equal(ui.health.reason,'missing-debug-port');
-  assert.equal(calls,1);
-  ui.discover=async()=>{throw new Error('generic transient failure');};
-  await ui.tick();
-  assert.equal(ui.health.state,'reconnecting');
-  assert.equal(Object.hasOwn(ui.health,'reason'),false);
-  assert.equal(calls,1);
-  owned=false;
-  ui.discover=async()=>{throw Object.assign(new Error('missing again'),{code:'ENOENT'});};
-  await ui.tick();
-  assert.equal(calls,1,'must not invoke missing-port hook without ownership');
-  owned=true;
-  ui.diagnoseError=async()=>({reason:'debug-port-disabled',hostVersion:'2.33.0',launchConfigured:true,message:'Configured'});
-  ui.discover=async()=>{throw Object.assign(new Error('missing after update'),{code:'ENOENT'});};
-  await ui.tick();
-  assert.equal(ui.health.reason,'debug-port-disabled');
-  assert.equal(ui.health.hostVersion,'2.33.0');
-  assert.equal(ui.health.launchConfigured,true);
-  assert.equal(calls,2);
-  ui.diagnoseError=null;
-  ui.discover=async()=>[target()];
-  await ui.tick();
-  assert.equal(ui.health.state,'mounted');
-  assert.equal(Object.hasOwn(ui.health,'reason'),false);
+test('bridge timeout, queue saturation, binding error and reinjection never return enabled:false',async()=>{
+  const window={};window.top=window;const sent=[];const timers=[];
+  window.__agPulseRuntimeCallV4=payload=>sent.push(JSON.parse(payload));
+  const fakeSetTimeout=(fn,ms)=>{const t={fn,ms,cleared:false};timers.push(t);return t;};
+  const fakeClearTimeout=t=>{if(t)t.cleared=true;};
+  const source=makeRendererSource('module.exports = function(){return {};};','module.exports = function(){};');
+  runInNewContext(source,{window,setTimeout:fakeSetTimeout,clearTimeout:fakeClearTimeout});
+
+  // 15s request timeout resolves transiently without disabling the widget.
+  const timedOut=window.agPulseHost.getMetrics({conversationId:null});
+  assert.equal(timers.length,1);assert.equal(timers[0].ms,15000);
+  timers[0].fn();
+  const timeoutResult=await timedOut;
+  assert.equal(timeoutResult.connection,'offline');
+  assert.equal(timeoutResult.transient,true);
+  assert.equal(timeoutResult.enabled,undefined);
+
+  // Queue saturation (>= 8 pending) resolves transiently without enabled:false.
+  const pendingCalls=[];
+  for(let i=0;i<8;i++)pendingCalls.push(window.agPulseHost.getMetrics({conversationId:null}));
+  const saturated=await window.agPulseHost.getMetrics({conversationId:null});
+  assert.equal(saturated.connection,'offline');
+  assert.equal(saturated.transient,true);
+  assert.equal(saturated.enabled,undefined);
+
+  // Re-injecting the identical source with the same binding releases orphaned calls cleanly.
+  runInNewContext(source,{window,setTimeout:fakeSetTimeout,clearTimeout:fakeClearTimeout});
+  const released=await Promise.all(pendingCalls);
+  for(const item of released){assert.equal(item.connection,'offline');assert.equal(item.transient,true);assert.equal(item.enabled,undefined);}
+
+  // Transient binding throw also resolves without enabled:false.
+  window.__agPulseRuntimeCallV4=()=>{throw new Error('binding unavailable');};
+  const failed=await window.agPulseHost.getMetrics({conversationId:null});
+  assert.equal(failed.connection,'offline');assert.equal(failed.transient,true);assert.equal(failed.enabled,undefined);
+
+  // Explicit dispose still resolves pending calls with enabled:false.
+  window.__agPulseRuntimeCallV4=payload=>sent.push(JSON.parse(payload));
+  const closing=window.agPulseHost.getMetrics({conversationId:null});
+  window.__agPulseRuntimeBridge.dispose();
+  assert.equal((await closing).enabled,false);
+});
+
+test('inflight saturation replies immediately with transient offline instead of dropping into a 15s timeout',async()=>{
+  const {ui,connections}=fixture();
+  const gates=[];
+  ui.snapshot=()=>new Promise(resolve=>{gates.push(resolve);});
+  await ui.tick();const c=connections[0];
+  const req=id=>ui.event(c,{method:'Runtime.bindingCalled',params:{name:ui.binding,executionContextId:7,payload:JSON.stringify({id,type:'metrics',input:{conversationId:null}})}});
+  const running=[];
+  for(let i=1;i<=8;i++)running.push(req(i));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(c.inflight,8);
+  await req(9);
+  const ninthReply=c.calls.find(call=>call.method==='Runtime.evaluate'&&call.params.expression?.includes('?.resolve(9,'));
+  assert.ok(ninthReply,'9th request must receive immediate transient reply instead of silent drop');
+  assert.ok(ninthReply.params.expression.includes('"transient":true'));
+  assert.equal(ninthReply.params.expression.includes('"enabled":false'),false);
+  for(const resolve of gates)resolve({connection:'live',groups:[],speed:null});
+  await Promise.all(running);
   await ui.stop();
 });
 
-test('runtime bridge allows autoRelaunchDebug boolean preference updates',async()=>{
+test('transient heartbeat timeouts keep the live desktop widget mounted and reconnect without disposing UI',async()=>{
   const {ui,connections}=fixture();
-  const writes=[];
-  ui.preferences={get:async()=>({language:'en',revision:1}),set:async v=>{writes.push(v);return {language:'en',...v,revision:2};}};
   await ui.tick();
-  const c=connections[0];
-  await ui.event(c,{method:'Runtime.bindingCalled',params:{name:ui.binding,executionContextId:7,payload:JSON.stringify({id:21,type:'preferences',input:{autoRelaunchDebug:true}})}});
-  assert.deepEqual(writes,[{autoRelaunchDebug:true}]);
-  assert.ok(c.calls.some(call=>call.params.expression?.includes('"autoRelaunchDebug":true')));
+  const first=connections[0];
+  const orig=first.command.bind(first);
+  let failHeartbeat=true;
+  first.command=async(method,params={})=>{
+    if(failHeartbeat&&method==='Runtime.evaluate'&&params.returnByValue)throw new Error('Renderer command timeout');
+    return orig(method,params);
+  };
+
+  // Single transient 5s heartbeat timeout keeps session and mounted UI intact.
+  await ui.tick();
+  assert.equal(ui.sessions.size,1);
+  assert.equal(first.closed,false);
+  assert.equal(ui.health.state,'mounted');
+  assert.equal(first.calls.some(call=>call.params.expression?.includes('__agPulseDispose')),false);
+
+  // Second consecutive timeout drops the stale socket without executing __agPulseDispose.
+  await ui.tick();
+  assert.equal(first.closed,true);
+  assert.equal(ui.sessions.size,0);
+  assert.ok(first.calls.some(call=>call.method==='Page.removeScriptToEvaluateOnNewDocument'));
+  assert.equal(first.calls.some(call=>call.params.expression?.includes('__agPulseDispose')),false);
+
+  // Next tick reconnects seamlessly.
+  await ui.tick();
+  assert.equal(connections.length,2);
+  assert.equal(ui.health.state,'mounted');
   await ui.stop();
 });

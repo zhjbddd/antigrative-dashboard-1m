@@ -71,3 +71,23 @@ test('Traditional Chinese (zh-TW) provides accurate localized terminology and to
   const saved=language.toggle();assert.equal(saved,'en');
   assert.equal(language.toggle(),'zh-TW');
 });
+
+test('all locales sanitize raw command errors and translate discovery timeouts',()=>{
+  const raw='Command failed: powershell.exe -NoProfile -NonInteractive -Command Get-CimInstance Win32_Process';
+  for(const [locale,fallback,timeoutText]of [
+    ['zh-CN','统计面板暂时无法连接','读取 Antigravity 进程信息超时'],
+    ['zh-TW','統計面板暫時無法連線','讀取 Antigravity 處理程序資訊逾時'],
+    ['en','Statistics are temporarily unavailable.','Timed out reading Antigravity process information.'],
+  ]){
+    const language=create(locale);
+    assert.equal(language.errorMessage(raw),fallback);
+    assert.doesNotMatch(language.errorMessage(raw),/powershell|Get-CimInstance/i);
+    assert.equal(language.errorMessage('读取 Antigravity 进程信息超时'),timeoutText);
+  }
+  const zh=create('zh-CN');
+  assert.equal(zh.errorMessage('Antigravity 接口 GetUserStatus 返回 500'),'Antigravity 接口 GetUserStatus 返回 500');
+  assert.equal(zh.errorMessage('Antigravity 接口 RetrieveUserQuotaSummary 返回 403'),'Antigravity 当前版本限制访问 RetrieveUserQuotaSummary 接口（HTTP 403）');
+  assert.equal(create('zh-TW').errorMessage('Antigravity 接口 RetrieveUserQuotaSummary 返回 403'),'Antigravity 目前版本限制存取 RetrieveUserQuotaSummary API（HTTP 403）');
+  assert.equal(create('en').errorMessage('Antigravity 接口 RetrieveUserQuotaSummary 返回 403'),'Antigravity restricted access to RetrieveUserQuotaSummary (HTTP 403).');
+  assert.equal(zh.errorMessage('Timed out reading Antigravity IDE processes'),'读取 Antigravity IDE 进程信息超时');
+});

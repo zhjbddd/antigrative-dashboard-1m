@@ -8,15 +8,14 @@ const gemini={id:'gemini',name:'Gemini'},argon={id:'opaque-premium',name:'Gemini
 test('quota labels and selection agree across IDs, display names and order in all languages',()=>{
  for(const locale of ['en','zh-CN','zh-TW']){
   const ui=createI18n(locale);
-  assert.equal(ui.quotaGroupLabel(third),'Claude');
-  assert.equal(ui.quotaGroupLabel({id:'3p',name:'Claude and GPT models'}),'Claude');
-  assert.equal(ui.quotaGroupLabel({id:'vendor',name:'Perplexity Fable 5.1'}),'Claude');
   for(const group of [argon,{id:'gemini-argon',name:'Premium quota'},{id:'group-1',name:'Gemini 4 Argon'}]){
    assert.equal(ui.quotaGroupLabel(group),'Gemini (Argon)');
    for(const groups of [[gemini,group,third],[group,third,gemini]]){
     assert.equal(ui.chooseQuotaGroup(groups,'Gemini 4 Argon').id,group.id);
     assert.equal(ui.chooseQuotaGroup(groups,'Gemini Flash').id,'gemini');
     assert.equal(ui.chooseQuotaGroup(groups,'Gemini 4 Hydrogen (XHigh)').id,'gemini');
+    assert.equal(ui.chooseQuotaGroup(groups,'Gemini 4 Neon (High)').id,'gemini');
+    assert.equal(ui.chooseQuotaGroup(groups,'Neon (High)').id,'gemini');
     assert.equal(ui.chooseQuotaGroup(groups,'Orchestrator (Carbon)').id,'gemini');
     assert.equal(ui.chooseQuotaGroup(groups,'GPT-5').id,'3p');
     assert.equal(ui.chooseQuotaGroup(groups,'Claude Sonnet').id,'3p');
@@ -27,19 +26,6 @@ test('quota labels and selection agree across IDs, display names and order in al
    }
   }
  }
-});
-
-test('cold-start placeholders and prefixed models resolve to the expected quota group without guessing unknown Mxxx',()=>{
- const ui=createI18n('en'),groups=[gemini,argon,third];
- for(const model of ['MODEL_PLACEHOLDER_M26','word/MODEL_PLACEHOLDER_M26','MODEL_PLACEHOLDER_M35','word/claude-opus-5-5','perplexity/fable-5.1']){
-  assert.equal(ui.chooseQuotaGroup(groups,model).id,'3p',model);
- }
- for(const model of ['MODEL_PLACEHOLDER_M318','word/MODEL_PLACEHOLDER_M318','MODEL_PLACEHOLDER_M319','MODEL_PLACEHOLDER_M320','MODEL_GOOGLE_GEMINI_INTERNAL_BYOM']){
-  assert.equal(ui.chooseQuotaGroup(groups,model).id,'gemini',model);
- }
- assert.equal(ui.chooseQuotaGroup(groups,'gemini-pro-orchestrator-g1-pro').id,argon.id);
- assert.equal(ui.chooseQuotaGroup([gemini,third],'gemini-pro-orchestrator-g1-pro').id,'gemini');
- assert.equal(ui.quotaGroupKind({name:'MODEL_PLACEHOLDER_M322'}),null);
 });
 
 test('an opaque quota group from the real normalizer is selected using its display name',()=>{

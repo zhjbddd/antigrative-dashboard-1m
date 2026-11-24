@@ -36,7 +36,11 @@ module.exports = function installAgPulseInlineWidget() {
     initial:localGet('ag-pulse-usage-scope'),cache:value=>localSet('ag-pulse-usage-scope',value),
     write:input=>window.agPulseHost.setPreferences(input),changed:()=>{for(const inst of instances)inst.onUsageScopeChanged();},
   });
-  function syncGuide(value){speedStyle.sync(value);usageScope.sync(value);if(value?.languageGuideDismissed===true)guideDismissed=true;if(value?.usageGuideDismissed===true){usageGuideDismissed=true;for(const inst of instances)inst.syncUsageGuide();}}
+  const stripMode=language.connectStripMode({
+    initial:localGet('ag-pulse-strip-mode'),cache:value=>localSet('ag-pulse-strip-mode',value),
+    write:input=>window.agPulseHost.setPreferences(input),changed:()=>{for(const inst of instances)inst.onStripModeChanged();},
+  });
+  function syncGuide(value){speedStyle.sync(value);usageScope.sync(value);stripMode.sync(value);if(value?.languageGuideDismissed===true)guideDismissed=true;if(value?.usageGuideDismissed===true){usageGuideDismissed=true;for(const inst of instances)inst.syncUsageGuide();}}
   const preferences=language.connectPreferences({
     read:async()=>{const value=await window.agPulseHost.getPreferences();syncGuide(value);return value;},
     write:async input=>{const value=await window.agPulseHost.setPreferences(input);syncGuide(value);return value;},
@@ -401,11 +405,12 @@ module.exports = function installAgPulseInlineWidget() {
   let node=null,root=null,data=null,pending=false,cardName=null,hoverTimer=null,openTimer=null,warmUntil=0,lastConversation=undefined,lastFetch=0,lastExpiredRefresh=0,resizeObserver=null,modelObserver=null,themeController=null,changingCards=false;
   const isWarm=()=>Boolean(cardName||Date.now()<warmUntil);
   let chosen=null,group=null,autoGroupId=null,lastModelSig=null,quotaSigCache=null,quotaObservedAt=0;
+  let lastQuotaUsageAccount=null;const lastQuotaWindowUsage=new Map();
   let refreshRequest=null,manualRequest=null,hoverQuotaRequest=null,lastQuotaHoverAt=0,requestEpoch=0,scopeRequestEpoch=0;
   let composer=null,usageDashboard=null,updateMenu=null;
   let densityFrame=null,densityMotion=null,densityProbe=null;
   let isPrimary=false,parked=false,parkedKind=null,instDisposed=false;
-  let emptyCompact=true,hydrated=false,seenEmptySession=false,suppressNextMotion=false,springNextExpand=false;
+  let emptyCompact=true,hasContextPercent=false,hydrated=false,seenEmptySession=false,suppressNextMotion=false,springNextExpand=false;
   const $=id=>root?.getElementById(id);
   const text=(id,value)=>{const e=$(id);if(e&&e.textContent!==String(value))e.textContent=String(value);};
   const conversationId=()=>{
@@ -475,7 +480,7 @@ module.exports = function installAgPulseInlineWidget() {
     lastConversation=id;requestEpoch++;pending=false;refreshRequest=null;lastFetch=0;
     stopDensityMotion();densityFrame=null;densityProbe=null;
     manualRequest=null;hoverQuotaRequest=null;lastQuotaHoverAt=0;quotaSigCache=null;setQuotaBusy(false);
-    emptyCompact=true;springNextExpand=false;suppressNextMotion=false;
+    emptyCompact=true;hasContextPercent=false;springNextExpand=false;suppressNextMotion=false;
     if(!id){hydrated=true;seenEmptySession=true;}
     else if(prevId===null&&seenEmptySession){hydrated=false;}
     else{hydrated=false;seenEmptySession=false;}
@@ -496,6 +501,20 @@ module.exports = function installAgPulseInlineWidget() {
     for(const button of root.querySelectorAll('[data-language-choice]')){attribute(button,'aria-pressed',button.dataset.languageChoice===language.language);attribute(button,'data-save-failed',preferences.error);attribute(button,'title',preferences.error?t('languageSaveFailed'):(button.getAttribute('aria-label')||button.textContent));}
     text('language-save-note',preferences.error?t('languageSaveFailed'):'');
     for(const button of root.querySelectorAll('[data-speed-style-choice]')){const value=button.dataset.speedStyleChoice,name=t(value==='cat'?'styleCat':'styleMinimal'),failed=speedStyle.error&&speedStyle.style===value;attribute(button,'aria-label',name);attribute(button,'title',failed?`${name} · ${t('styleSaveFailed')}`:name);attribute(button,'aria-pressed',speedStyle.style===value);attribute(button,'data-save-failed',failed);}
+    const toggleBtn=$('strip-toggle');
+    if(toggleBtn){
+      const minimal=stripMode.mode==='minimal',labelText=t(minimal?'stripExpand':'stripCollapse'),failed=stripMode.error;
+      attribute(toggleBtn,'aria-expanded',String(!minimal));
+      attribute(toggleBtn,'aria-label',labelText);
+      attribute(toggleBtn,'title',failed?`${labelText} · ${t('stripModeSaveFailed')}`:labelText);
+      attribute(toggleBtn,'data-save-failed',failed?'true':null);
+    }
+    for(const button of root.querySelectorAll('[data-strip-mode-choice]')){
+      const value=button.dataset.stripModeChoice,name=t(value==='minimal'?'stripMinimal':'stripFull'),failed=stripMode.error&&stripMode.mode===value;
+      attribute(button,'aria-label',name);attribute(button,'title',failed?`${name} · ${t('stripModeSaveFailed')}`:name);
+      attribute(button,'aria-pressed',stripMode.mode===value);attribute(button,'data-save-failed',failed?'true':null);
+    }
+    attribute(node,'data-strip-mode',stripMode.mode);
     const zh=language.language==='zh-CN',tw=language.language==='zh-TW';
     text('usage-today-label',tw?'今日用量':(zh?'今日用量':'Today'));text('usage-month-label',tw?'本月用量':(zh?'本月用量':'This month'));
     text('usage-open-label',tw?'檢視用量統計':(zh?'查看用量统计':'View token usage'));updateMenu?.localize();
@@ -513,6 +532,11 @@ module.exports = function installAgPulseInlineWidget() {
       if(!element.getClientRects().length)continue;
       const style=getComputedStyle(element);
       pieces.set(element,{rect:element.getBoundingClientRect(),opacity:1,font:style.font,color:style.color,icon:element.matches('svg,.context-ring')});
+    }
+    const toggleSvg=root.querySelector('.bar .strip-toggle svg');
+    if(toggleSvg?.getClientRects().length){
+      const toggleBtn=toggleSvg.parentElement,tStyle=getComputedStyle(toggleBtn);
+      pieces.set(toggleSvg,{rect:toggleSvg.getBoundingClientRect(),opacity:Number(tStyle.opacity)||1,font:tStyle.font,color:tStyle.color,icon:true,toggle:true,minimal:node.classList.contains('minimal')});
     }
     // Read interrupted copies before changing density. Reading them after the
     // final flex layout moves their parent would bake that shift into the new
@@ -625,7 +649,15 @@ module.exports = function installAgPulseInlineWidget() {
       const start=from?.rect||end;
       const startX=Math.max(left,Math.min(right-start.width,start.left));
       const dx=reduce?0:startX-endX,dy=reduce?0:start.top-end.top;
-      const startOpacity=from?.opacity??0,endOpacity=to?1:0;
+      const startOpacity=from?.opacity??0,endOpacity=to?(to.opacity??1):0;
+      if(piece.toggle){
+        const fromRot=from?.minimal?180:0,toRot=(to||from)?.minimal?180:0;
+        const t0=reduce?`rotate(${toRot}deg)`:`translate(${dx}px,${dy}px) rotate(${fromRot}deg)`;
+        const t1=`translate(0,0) rotate(${toRot}deg)`;
+        play(visual,[{transform:t0,opacity:startOpacity},{transform:t1,opacity:endOpacity}],{fill:'both',duration:to?duration:80});
+        if(to&&element.parentElement)play(element.parentElement,[{opacity:0},{opacity:0}],{fill:'both'});
+        continue;
+      }
       play(visual,[{transform:`translate(${dx}px,${dy}px)`,opacity:startOpacity},{transform:'translate(0,0)',opacity:endOpacity}],{fill:'both',...(piece.icon?{}:{duration:to?duration:80})});
       if(to)play(element,[{opacity:0},{opacity:0}],{fill:'both'});
     }
@@ -671,33 +703,69 @@ module.exports = function installAgPulseInlineWidget() {
       }
       return true;
     };
-    let safe=false;
+    let safe=false,nextDensity='full',snapshotTaken=false;
+    const captureBeforeMutate=()=>{if(oldReady&&!snapshotTaken){previous=densitySnapshot(previous);snapshotTaken=true;}};
+    const DENSITY_CLASSES=['icons-only','minimal','minimal-tight','minimal-icon','minimal-empty'];
+    const hasExactClasses=wanted=>DENSITY_CLASSES.every(cls=>node.classList.contains(cls)===wanted.includes(cls));
+    const applyDensityClasses=wanted=>{
+      if(hasExactClasses(wanted))return;
+      captureBeforeMutate();
+      for(const cls of DENSITY_CLASSES){const need=wanted.includes(cls);if(node.classList.contains(cls)!==need)node.classList.toggle(cls,need);}
+    };
     const rowWidth=composer.row.getBoundingClientRect().width;
-    const probeKey=()=>{const s=getComputedStyle(node);return node.style.cssText.replace(/--pulse-native-room:[^;]+;?/g,'')+'|'+s.fontFamily+'|'+s.fontSize+'|'+language.language+'|'+lastConversation+'|'+bar.textContent+'|'+$('dot').className+'|'+getComputedStyle(composer.row).gap+'|'+Array.from(composer.row.querySelectorAll('button,[role="button"],a[href],input,select')).filter(c=>c!==composer.model&&!(composer.model&&c.contains(composer.model))).map(c=>c.getBoundingClientRect().width).join(',');};
-    if(emptyCompact){
-      if(!node.classList.contains('icons-only')){if(oldReady)previous=densitySnapshot(previous);node.classList.add('icons-only');}
-      densityProbe=null;safe=fits();
-    }else{
-      safe=fits();
-      if(oldDensity==='icons'){
-        const key=probeKey();
-        // Twelve pixels of recovery headroom prevents threshold chatter. Shrinking
-        // or scrolling in icon mode never toggles back to full just to measure it.
-        if(!densityProbe||key!==densityProbe.key||rowWidth>=densityProbe.width+12){
-          previous=densitySnapshot(previous);node.classList.remove('icons-only');safe=fits();
-          if(!safe){node.classList.add('icons-only');safe=fits();densityProbe={key,width:rowWidth};}
-          else densityProbe=null;
+    const probeKey=()=>{const s=getComputedStyle(node);return node.style.cssText.replace(/--pulse-native-room:[^;]+;?/g,'')+'|'+s.fontFamily+'|'+s.fontSize+'|'+language.language+'|'+stripMode.mode+'|'+(hasContextPercent?'1':'0')+'|'+lastConversation+'|'+bar.textContent+'|'+$('dot').className+'|'+getComputedStyle(composer.row).gap+'|'+Array.from(composer.row.querySelectorAll('button,[role="button"],a[href],input,select')).filter(c=>c!==composer.model&&!(composer.model&&c.contains(composer.model))).map(c=>c.getBoundingClientRect().width).join(',');};
+    if(stripMode.mode==='minimal'){
+      const emptyMinimal=emptyCompact||!hasContextPercent;
+      const tiers=emptyMinimal
+        ? [{name:'minimal',classes:['minimal','minimal-empty']},{name:'minimal-icon',classes:['minimal','minimal-icon','minimal-empty']}]
+        : [{name:'minimal',classes:['minimal']},{name:'minimal-tight',classes:['minimal','minimal-tight']},{name:'minimal-icon',classes:['minimal','minimal-icon']}];
+      const curIdx=tiers.findIndex(item=>item.name===oldDensity);
+      const key=curIdx>0?probeKey():null;
+      const canRecover=curIdx>0&&(!densityProbe||key!==densityProbe.key||rowWidth>=densityProbe.width+12);
+      const startIdx=curIdx<=0||canRecover?0:curIdx;
+      nextDensity=tiers[tiers.length-1].name;
+      for(let i=startIdx;i<tiers.length;i++){
+        applyDensityClasses(tiers[i].classes);
+        safe=fits();
+        if(safe){
+          nextDensity=tiers[i].name;
+          if(i===0)densityProbe=null;
+          else if(startIdx===0||!densityProbe||key!==densityProbe.key)densityProbe={key:key??probeKey(),width:rowWidth};
+          break;
         }
-      }else if(!safe){
-        previous=densitySnapshot(previous);node.classList.add('icons-only');safe=fits();densityProbe={key:probeKey(),width:rowWidth};
       }
+      if(!safe)densityProbe={key:key??probeKey(),width:rowWidth};
+    }else{
+      if(node.classList.contains('minimal')){
+        applyDensityClasses(emptyCompact?['icons-only']:[]);
+        densityProbe=null;
+      }
+      if(emptyCompact){
+        applyDensityClasses(['icons-only']);
+        densityProbe=null;safe=fits();
+      }else{
+        safe=fits();
+        if(oldDensity==='icons'&&!snapshotTaken){
+          const key=probeKey();
+          // Twelve pixels of recovery headroom prevents threshold chatter. Shrinking
+          // or scrolling in icon mode never toggles back to full just to measure it.
+          if(!densityProbe||key!==densityProbe.key||rowWidth>=densityProbe.width+12){
+            applyDensityClasses([]);safe=fits();
+            if(!safe){applyDensityClasses(['icons-only']);safe=fits();densityProbe={key,width:rowWidth};}
+            else densityProbe=null;
+          }
+        }else if(!safe){
+          applyDensityClasses(['icons-only']);safe=fits();densityProbe={key:probeKey(),width:rowWidth};
+        }
+      }
+      nextDensity=node.classList.contains('icons-only')?'icons':'full';
     }
-    node.dataset.density=node.classList.contains('icons-only')?'icons':'full';
+    node.dataset.density=nextDensity;
     const state=safe?'ready':'blocked';
     if(node.dataset.layout!==state){node.dataset.layout=state;node.inert=!safe;if(!safe)hide();}
     const skipMotion=suppressNextMotion;suppressNextMotion=false;
-    const useSpring=springNextExpand&&node.dataset.density==='full';
-    if(node.dataset.density==='full'||!safe)springNextExpand=false;
+    const useSpring=stripMode.mode==='full'&&springNextExpand&&node.dataset.density==='full';
+    if(node.dataset.density==='full'||stripMode.mode==='minimal'||!safe)springNextExpand=false;
     const changed=safe&&oldReady&&previous?.row===composer.row&&oldDensity!==node.dataset.density;
     const next=changed?densitySnapshot():{rect:node.getBoundingClientRect(),model:composer.model,modelRect:composer.model?.getBoundingClientRect(),row:composer.row};
     if(changed&&!skipMotion)animateDensity(previous,next,{spring:useSpring});
@@ -727,7 +795,8 @@ module.exports = function installAgPulseInlineWidget() {
     // A hidden ribbon must release its flex space as well as its hit targets.
     // The budget is independent of our own rectangle, so it recovers directly
     // when the sidebar is closed, without probing the native badge each frame.
-    node.classList.toggle('native-no-room',room<76);
+    const minRoom=stripMode.mode==='minimal'?24:76;
+    node.classList.toggle('native-no-room',room<minRoom);
   }
   function currentModelTrigger(){
     const trigger=composer?.model?.isConnected?composer.model:(composer?.branch||composer?.row)?.querySelector('[data-testid="model-selector-trigger"]');
@@ -923,7 +992,8 @@ module.exports = function installAgPulseInlineWidget() {
       return;
     }
     resizeObserver?.disconnect();modelObserver?.disconnect();node=document.createElement('div');
-    node.classList.add('icons-only');
+    if(stripMode.mode==='minimal')node.classList.add('minimal','minimal-empty');
+    else node.classList.add('icons-only');
     node.dataset.agPulseBar='true';
     node.dataset.scope=found.kind;
     node.style.cssText='display:flex;align-items:center;flex:0 1 auto;min-width:0;max-width:min(100%,var(--pulse-native-room,100%));height:28px;margin:0 5px;position:relative;';
@@ -940,20 +1010,27 @@ module.exports = function installAgPulseInlineWidget() {
       .pace-badge[data-pace=exhaust]{color:var(--pulse-warning);background:color-mix(in srgb,var(--pulse-warning) 14%,transparent)}.pace-badge[data-pace=exhaust] .pace-dot,.pace-badge[data-pace=tight] .pace-dot{background:var(--pulse-warning)}
       .pace-badge[data-critical=true]{color:var(--pulse-danger);background:color-mix(in srgb,var(--pulse-danger) 14%,transparent)}.pace-badge[data-critical=true] .pace-dot{background:var(--pulse-danger)}
       .pace-badge[data-pace=ok] .pace-dot{background:var(--pulse-success)}
-      .quota-section .quota-track{position:relative;height:5px;overflow:hidden}.quota-track .track-actual{border-radius:999px;background:var(--pulse-accent)}
-      .quota-forecast{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;line-height:14px;color:var(--pulse-muted);font-variant-numeric:tabular-nums}.quota-forecast[hidden]{display:none}.forecast-main{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.forecast-main[data-alert=true]{color:var(--pulse-label);font-weight:500}
+      .quota-section .quota-track{position:relative;height:6px;overflow:hidden}.quota-track .track-actual,.quota-track .track-forecast{position:absolute;left:0;top:0;height:100%}.quota-track .track-actual{border-radius:999px}.quota-track .track-forecast{width:0;border-radius:0 999px 999px 0;background:repeating-linear-gradient(-45deg,var(--pulse-card) 0 1.5px,transparent 1.5px 4px);opacity:.8;pointer-events:none}
+      .quota-forecast{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;line-height:14px;color:var(--pulse-muted);font-variant-numeric:tabular-nums}.quota-forecast[hidden]{display:none}.forecast-main{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.forecast-main[data-alert=true]{color:var(--pulse-warning);font-weight:500}
       .quota-usage{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:3px;font-size:11px;line-height:14px;color:var(--pulse-muted);font-variant-numeric:tabular-nums}.quota-usage[hidden]{display:none}.quota-usage-val{color:var(--pulse-label);font-weight:500;text-align:right}
       .quota-siblings{display:flex;flex-direction:column;gap:4px;margin-top:7px;padding-top:7px;border-top:1px solid var(--pulse-separator)}.quota-siblings[hidden]{display:none}
       .quota-sibling{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:5px 7px;border:1px solid transparent;border-radius:6px;background:var(--pulse-control);color:var(--pulse-label);font-size:11px;line-height:15px;text-align:left;transition:background-color 120ms ease,border-color 120ms ease,color 120ms ease}.quota-sibling:hover{background:var(--pulse-hover);border-color:var(--pulse-border);color:var(--pulse-foreground)}
       .sibling-label{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:1 1 auto;font-weight:500}.sibling-dot{width:5px;height:5px;border-radius:50%;background:var(--pulse-muted);opacity:.65;flex:none}.sibling-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .sibling-metrics{display:inline-flex;align-items:center;gap:8px;flex:none;font-variant-numeric:tabular-nums}.sibling-win{display:inline-flex;align-items:center;gap:4px}.sibling-tag{color:var(--pulse-muted)}.sibling-val{color:var(--pulse-foreground);font-weight:550}.sibling-bar{display:block;width:24px;height:3px;border-radius:999px;background:var(--pulse-track);overflow:hidden}.sibling-bar i{display:block;height:100%;width:0;border-radius:999px;background:color-mix(in srgb,var(--pulse-accent) 72%,transparent)}
+      .sibling-metrics{display:inline-flex;align-items:center;gap:8px;flex:none;font-variant-numeric:tabular-nums}.sibling-win{display:inline-flex;align-items:center;gap:4px}.sibling-tag{color:var(--pulse-muted)}.sibling-val{color:var(--pulse-foreground);font-weight:550}.sibling-bar{display:block;width:24px;height:3px;border-radius:999px;background:var(--pulse-track);overflow:hidden}.sibling-bar i{display:block;height:100%;width:0;border-radius:999px;background:color-mix(in srgb,var(--pulse-muted) 65%,var(--pulse-foreground))}
       .refresh{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:5px;color:var(--pulse-muted);border:0;background:transparent;padding:0}.refresh:hover{color:var(--pulse-foreground);background:var(--pulse-hover)}.refresh[aria-busy=true]{color:var(--pulse-emphasis);cursor:wait}.refresh[aria-busy=true] svg{animation:pulse-refresh-spin 1s linear infinite;transform-origin:center}
       .quota-spinner{width:14px;height:14px;border-radius:4px;pointer-events:none;flex:none}.quota-spinner[hidden]{display:none}
       @keyframes pulse-refresh-spin{to{transform:rotate(360deg)}}
       @media(prefers-reduced-motion:reduce){.refresh[aria-busy=true] svg{animation:none;opacity:.65}}
       .reset{color:var(--pulse-emphasis)}.rounds,.group,.dot.live{display:none}.chip[hidden]{display:none}
+      .strip-toggle{display:inline-grid;place-items:center;flex:none;width:16px;height:22px;padding:0;margin:0 -2px 0 0;border:0;border-radius:5px;background:transparent;color:var(--pulse-muted);opacity:.46;transition:opacity 140ms ease,color 140ms ease,background-color 140ms ease,transform 120ms ease}.bar:hover .strip-toggle,.strip-toggle:hover,.strip-toggle:focus-visible{opacity:1}.strip-toggle:hover{background:var(--pulse-hover);color:var(--pulse-hover-text)}.strip-toggle:active{transform:scale(.94)}.strip-toggle[data-save-failed=true]{opacity:1;color:var(--pulse-warning)}.strip-toggle svg{width:11px;height:11px;stroke-width:1.45;transition:transform 180ms cubic-bezier(0.32,0.72,0,1)}:host(.minimal) .strip-toggle svg{transform:rotate(180deg)}
+      @media(prefers-reduced-motion:reduce){.strip-toggle,.strip-toggle svg{transition:none}.strip-toggle:active{transform:none}}
       :host(.compact) .countdown{display:none}:host(.narrow) .cache-total,:host(.narrow) [data-card="cache"] .dim,:host(.narrow) .chip svg,:host(.narrow) .context-label{display:none}:host(.narrow) .chip{padding:2px 3px;font-size:11px}:host(.narrow) .bar{gap:1px}
-      :host(.icons-only) .bar{gap:2px}:host(.icons-only) .chip{flex:0 0 24px;width:24px;min-width:24px;height:24px;padding:0;gap:0;justify-content:center}:host(.icons-only) .chip:focus-visible{outline-offset:-2px}:host(.icons-only) .chip>:not(svg):not(.context-ring){display:none}:host(.icons-only) .bar>.dot{display:none}
+      :host(.icons-only) .bar{gap:2px}:host(.icons-only) .strip-toggle{display:none}:host(.icons-only) .chip{flex:0 0 24px;width:24px;min-width:24px;height:24px;padding:0;gap:0;justify-content:center}:host(.icons-only) .chip:focus-visible{outline-offset:-2px}:host(.icons-only) .chip>:not(svg):not(.context-ring){display:none}:host(.icons-only) .bar>.dot{display:none}
+      :host(.minimal) .bar{gap:2px}:host(.minimal) .bar>.dot,:host(.minimal) [data-card="speed"],:host(.minimal) [data-card="cache"],:host(.minimal) .context-label{display:none}:host(.minimal) [data-card="context"]{gap:4px;padding:3px 5px}
+      :host(.minimal.minimal-empty) #context-percent{display:none}:host(.minimal.minimal-empty) [data-card="context"]{flex:0 0 24px;width:24px;min-width:24px;height:24px;padding:0;gap:0;justify-content:center}
+      :host(.minimal.minimal-tight) .strip-toggle{display:none}
+      :host(.minimal.minimal-icon) .strip-toggle,:host(.minimal.minimal-icon) #context-percent{display:none}:host(.minimal.minimal-icon) [data-card="context"]{flex:0 0 24px;width:24px;min-width:24px;height:24px;padding:0;gap:0;justify-content:center}
+      :host(.minimal.minimal-icon) [data-card="context"]:focus-visible,:host(.minimal.minimal-empty) [data-card="context"]:focus-visible{outline-offset:-2px}
       :host([data-layout=blocked]){visibility:hidden!important;pointer-events:none!important}:host(.native-no-room){flex:0 0 0px!important;width:0!important;max-width:0!important;margin:0!important}
       .density-stage{position:absolute;overflow:clip;pointer-events:none;user-select:none}.density-piece{pointer-events:none!important}
       .scope-note{margin:6px 0 0;color:var(--pulse-muted);font-size:11px}:host([data-scope=main]) .scope-note,:host([data-scope=ide]) .scope-note{display:none}
@@ -962,9 +1039,6 @@ module.exports = function installAgPulseInlineWidget() {
       :host(:not([data-collection=limited])) .collection-warning{display:none!important}.collection-warning,.collection-processing{display:none}.collection-label{display:none}:host([data-collection=limited]) [data-card=cache]{color:var(--pulse-warning)}:host([data-collection=limited]) [data-card=cache]>svg:first-child{display:none}:host([data-collection=limited]) [data-card=cache]>.collection-warning{display:block}:host([data-collection=limited]) [data-card=cache]>:not(svg){display:none}:host([data-collection=limited]) [data-card=cache]>.collection-label{display:inline}:host([data-collection=limited].icons-only) [data-card=cache]>.collection-label{display:none}
       :host([data-collection=processing]) .collection-state::before{background:var(--pulse-emphasis)}:host([data-collection=processing]) .collection-notice strong,:host([data-collection=processing]) [data-card=cache]{color:var(--pulse-emphasis)}:host([data-collection=processing]) [data-card=cache]>svg:first-child,:host([data-collection=processing]) [data-card=cache]>:not(svg){display:none}:host([data-collection=processing]) [data-card=cache]>.collection-processing{display:block}:host([data-collection=processing]) [data-card=cache]>.collection-label{display:inline}:host([data-collection=processing].icons-only) [data-card=cache]>.collection-label{display:none}:host(:not([data-collection=processing])) .collection-processing{display:none!important}
       [data-card=cache]{position:relative}[data-card=cache][data-task-current-only=true]::after{content:'!';position:absolute;top:0;left:13px;z-index:1;width:9px;height:9px;border-radius:50%;background:var(--pulse-warning);color:var(--pulse-background);font-size:7px;font-weight:700;line-height:9px;text-align:center;pointer-events:none}
-      :host(:not(.icons-only)) [data-card=context][data-update-available=true]{padding-right:12px}
-      [data-card=context]{position:relative}[data-card=context][data-update-available=true]::after{content:'';position:absolute;top:3px;right:3px;z-index:1;width:6px;height:6px;border-radius:50%;background:var(--pulse-success);box-shadow:0 0 0 1.5px var(--pulse-card);pointer-events:none}
-      :host(.icons-only) [data-card=context][data-update-available=true]::after{top:2px;right:2px}
       #transcript-details{margin-top:10px;border-top:1px solid var(--pulse-separator);padding-top:9px}#transcript-details summary{cursor:pointer;font-size:11px;color:var(--pulse-label)}#transcript-total{float:right;margin-left:8px;font-variant-numeric:tabular-nums;color:var(--pulse-foreground);font-size:11px}
       :host{--cat:var(--pulse-accent);--cat-shade:color-mix(in srgb,var(--pulse-accent) 70%,var(--pulse-background));--cat-light:color-mix(in srgb,var(--pulse-accent) 18%,var(--pulse-foreground));--cat-outline:color-mix(in srgb,var(--pulse-accent) 28%,var(--pulse-background));--cat-pink:color-mix(in srgb,var(--pulse-emphasis) 55%,var(--pulse-foreground));--cat-eye:var(--pulse-background);--cat-whisker:color-mix(in srgb,var(--pulse-accent) 32%,var(--pulse-foreground));--cat-tip:var(--pulse-emphasis);--cat-tint:color-mix(in srgb,var(--pulse-accent) 15%,transparent)}
       :host([data-pulse-theme="light"]){--cat-shade:color-mix(in srgb,var(--pulse-accent) 72%,var(--pulse-foreground));--cat-light:color-mix(in srgb,var(--pulse-accent) 16%,#fff);--cat-outline:color-mix(in srgb,var(--pulse-accent) 28%,var(--pulse-foreground));--cat-eye:var(--pulse-foreground);--cat-whisker:color-mix(in srgb,var(--pulse-accent) 38%,var(--pulse-foreground));--cat-tint:color-mix(in srgb,var(--pulse-accent) 12%,transparent)}
@@ -1006,15 +1080,16 @@ module.exports = function installAgPulseInlineWidget() {
       .quota-details{margin-top:7px}.quota-section+.quota-section{margin-top:8px;padding-top:8px;border-top:1px solid var(--pulse-separator)}.quota-section[hidden]+.quota-section{margin-top:0;padding-top:0;border-top:0}
       .quota-row-top{display:flex;align-items:baseline;gap:6px;font-size:11px}.quota-name{display:inline-flex;align-items:center;gap:5px;color:var(--pulse-label);margin-right:auto;min-width:0}.quota-meta{display:inline-flex;align-items:baseline;gap:4px;font-size:11px;color:var(--pulse-muted);font-variant-numeric:tabular-nums;white-space:nowrap}.quota-row-top strong{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;flex:none}.quota-track{margin:6px 0 0}.quota-section .footnote{margin-top:5px}.quota-error{color:var(--pulse-warning);margin-top:7px}
       .card-language{position:relative;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 0;padding:8px 0 0;border-top:1px solid var(--pulse-separator);font-size:11px;color:var(--pulse-muted)}
-      .card-footer-actions{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex:none}
-      .footer-repo-link{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;color:var(--pulse-muted);text-decoration:none;cursor:pointer;flex:none;transition:background-color 120ms ease,color 120ms ease,transform 120ms ease}
-      .footer-repo-link:hover{background:var(--pulse-hover);color:var(--pulse-foreground)}.footer-repo-link:active{transform:scale(.97)}.footer-repo-link:focus-visible{outline:2px solid var(--pulse-accent);outline-offset:2px}
-      .footer-repo-link svg{width:14px;height:14px;fill:currentColor;stroke:none;stroke-width:0;display:block}
-      .language-options{display:flex;gap:2px;padding:2px;border-radius:6px;background:var(--pulse-control);flex:none}
+      .card-footer-controls{display:inline-flex;align-items:center;gap:6px;flex:none}
+      .language-options,.strip-mode-options{display:flex;gap:2px;padding:2px;border-radius:6px;background:var(--pulse-control);flex:none}
       .language-options .language-button{border:0;background:none;font-size:11px;padding:2px 6px;margin:0;border-radius:4px;color:var(--pulse-muted);line-height:16px;cursor:pointer;transition:background-color 140ms ease,color 140ms ease,transform 120ms ease}
       .language-options .language-button:hover{color:var(--pulse-hover-text);background:var(--pulse-hover)}
       .language-options .language-button[aria-pressed=true]{color:var(--pulse-foreground);background:var(--pulse-hover);box-shadow:0 1px 2px var(--pulse-shadow)}
       .language-options .language-button:active{transform:scale(.97)}.language-button[data-save-failed=true]{color:var(--pulse-warning);text-decoration:underline dotted}
+      .strip-mode-button{display:grid;place-items:center;width:22px;height:20px;padding:0;margin:0;border:0;border-radius:4px;background:none;color:var(--pulse-muted);opacity:.72;cursor:pointer;transition:background-color 140ms ease,color 140ms ease,opacity 140ms ease,transform 120ms ease}
+      .strip-mode-button:hover{opacity:1;color:var(--pulse-hover-text);background:var(--pulse-hover)}.strip-mode-button:active{transform:scale(.94)}
+      .strip-mode-button[aria-pressed=true]{opacity:1;color:var(--pulse-foreground);background:var(--pulse-hover);box-shadow:0 1px 2px var(--pulse-shadow)}.strip-mode-button[data-save-failed=true]{color:var(--pulse-warning)}
+      .strip-mode-button svg{width:14px;height:10px;stroke-width:1.35}
       .language-guide{position:fixed;inset:auto;margin:0;padding:10px 12px;border:1px solid var(--pulse-border);border-radius:10px;background:var(--pulse-card);color:var(--pulse-foreground);box-shadow:0 4px 16px var(--pulse-shadow);font-size:11px;z-index:2147483000;overflow:visible}
       .language-guide[hidden]{display:none}.language-guide::backdrop{background:transparent;pointer-events:none}
       .language-guide::after{content:'';position:absolute;left:calc(var(--guide-anchor) - 4px);width:7px;height:7px;transform:rotate(45deg);background:var(--pulse-card);pointer-events:none}
@@ -1043,6 +1118,7 @@ module.exports = function installAgPulseInlineWidget() {
       @media(prefers-reduced-motion:no-preference){#speed-card:not([hidden]) .speed-min-dot.is-live{animation:speed-dot-breathe 1.8s ease-in-out infinite}}
       @keyframes speed-dot-breathe{0%,100%{opacity:1}50%{opacity:.4}}
     </style><div class="bar" data-i18n-aria="strip" aria-label="Dashboard statistics">
+      <button type="button" class="strip-toggle" id="strip-toggle" aria-expanded="true"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 8 6l-3.5 3.5"/></svg></button>
       <span class="dot" id="dot" title="Connecting"></span>
       <button class="chip" data-card="speed" data-i18n-aria="session" aria-controls="speed-card" aria-expanded="false"><svg class="cat-badge" id="strip-cat-badge" viewBox="0 0 16 10" aria-hidden="true"></svg><span class="rounds dim" id="rounds"></span><strong id="tps">—</strong><span>tok/s</span></button>
       <button class="chip" data-card="cache" data-i18n-aria="cacheTitle" aria-controls="cache-card" aria-expanded="false">${svg('cache')}<svg class="collection-warning" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 15 14H1ZM8 6v4m0 2v.1"/></svg><svg class="collection-processing" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5M8 1v3m3-2v3"/></svg><span class="collection-label"></span><span class="cache-total" id="cache-total">— tok</span><span class="dim">/</span><strong id="cache-rate">—</strong></button>
@@ -1060,7 +1136,7 @@ module.exports = function installAgPulseInlineWidget() {
       <div class="context-hero-row"><strong id="context-summary">—</strong><span class="context-hero-meta"><span class="tag context-compaction-pill" id="context-compaction-pill" hidden></span><span id="context-tokens">—</span></span></div>
       <div class="track" role="progressbar" data-i18n-aria="context" id="context-track"><i id="context-fill"></i></div>
       <div class="quota-bar-head"><div class="quota-spotlight-head" id="active-quota-group"><i class="spot-dot" id="spot-dot" aria-hidden="true"></i><strong class="spot-name" id="active-group-name">—</strong></div><div class="quota-actions"><span class="refresh quota-spinner" id="quota-spinner" role="status" data-i18n-aria="refreshing" aria-label="Refreshing…" aria-busy="false" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12.8 6a5.1 5.1 0 1 0 .1 4M12.8 2.5V6H9.2"/></svg></span><span class="pace-badge" id="quota-pace" hidden><i class="pace-dot" aria-hidden="true"></i><span id="quota-pace-text"></span></span></div></div>
-      <div class="quota-details">${['five','week'].map(name=>`<section class="quota-section" id="${name}-quota-section" data-i18n-aria="${name}" aria-label="${t(name)}"><div class="quota-row-top"><span class="quota-name">${svg(name)}<span id="${name}-quota-title" data-i18n="${name}">${t(name)}</span></span><span class="quota-meta"><span class="reset" id="${name}-countdown">—</span></span><strong id="${name}-balance">—</strong></div><div class="track quota-track" role="progressbar" data-i18n-aria="${name}" id="${name}-track"><i class="track-actual" id="${name}-fill"></i></div><div class="quota-forecast" id="${name}-forecast" hidden><span class="forecast-main" id="${name}-forecast-text"></span></div><div class="quota-usage" id="${name}-usage" hidden><span data-i18n="quotaWindowUsage">${t('quotaWindowUsage')}</span><span class="quota-usage-val" id="${name}-usage-value">—</span></div><p class="footnote" id="${name}-note" hidden></p></section>`).join('')}</div>
+      <div class="quota-details">${['five','week'].map(name=>`<section class="quota-section" id="${name}-quota-section" data-i18n-aria="${name}" aria-label="${t(name)}"><div class="quota-row-top"><span class="quota-name">${svg(name)}<span id="${name}-quota-title" data-i18n="${name}">${t(name)}</span></span><span class="quota-meta"><span class="reset" id="${name}-countdown">—</span></span><strong id="${name}-balance">—</strong></div><div class="track quota-track" role="progressbar" data-i18n-aria="${name}" id="${name}-track"><i class="track-actual" id="${name}-fill"></i><i class="track-forecast" id="${name}-projected-fill" aria-hidden="true"></i></div><div class="quota-forecast" id="${name}-forecast" hidden><span class="forecast-main" id="${name}-forecast-text"></span></div><div class="quota-usage" id="${name}-usage" hidden><span data-i18n="quotaWindowUsage">${t('quotaWindowUsage')}</span><span class="quota-usage-val" id="${name}-usage-value">—</span></div><p class="footnote" id="${name}-note" hidden></p></section>`).join('')}</div>
       <p class="footnote quota-error" id="quota-error" hidden></p>
       <div class="quota-siblings" id="quota-siblings" hidden></div>
     </section>`);
@@ -1070,18 +1146,14 @@ module.exports = function installAgPulseInlineWidget() {
     for(const card of root.querySelectorAll('.card')){
       const notice=document.createElement('section');notice.className='collection-notice';notice.hidden=true;
       setMarkup(notice,'<strong class="collection-state"></strong><div data-i18n="collectionReason"></div><details><summary data-i18n="collectionDetails"></summary><div class="collection-budget-kind"></div><div class="collection-budget-size"></div><div data-i18n="collectionNoPartial"></div></details>');
-      const docs=document.createElement('a');docs.href='https://github.com/wycocoyu/agy-context-dashboard/blob/main/docs/LONG_CONVERSATIONS.md';docs.target='_blank';docs.rel='noopener noreferrer';docs.dataset.i18n='collectionDocs';notice.querySelector('details').append(docs);
+      const docs=document.createElement('a');docs.href='https://github.com/ATtacK030130/antigrative-dashboard/blob/main/docs/LONG_CONVERSATIONS.md';docs.target='_blank';docs.rel='noopener noreferrer';docs.dataset.i18n='collectionDocs';notice.querySelector('details').append(docs);
       card.querySelector('.heading').after(notice);
       notice.querySelector('details').addEventListener('toggle',()=>{if(!disposed)position();});
     }
     const languageRow=document.createElement('div');languageRow.className='card-language';
-    setMarkup(languageRow,'<div class="language-options" role="group" data-i18n-aria="language"><button type="button" class="language-button" id="card-language-en" data-language-choice="en" aria-label="English">EN</button><button type="button" class="language-button" id="card-language-zh" data-language-choice="zh-CN" aria-label="简体中文">简</button><button type="button" class="language-button" id="card-language-zh-tw" data-language-choice="zh-TW" aria-label="繁體中文">繁</button></div><div class="card-footer-actions"></div>');
-    const footerActions=languageRow.querySelector('.card-footer-actions');
-    const repoLink=document.createElement('a');repoLink.className='footer-repo-link';repoLink.id='github-repo-link';repoLink.href='https://github.com/wycocoyu/agy-context-dashboard';repoLink.target='_blank';repoLink.rel='noopener noreferrer';repoLink.setAttribute('aria-label','GitHub');repoLink.title='GitHub';
-    setMarkup(repoLink,'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>');
-    footerActions.append(repoLink);
+    setMarkup(languageRow,'<div class="card-footer-controls"><div class="language-options" role="group" data-i18n-aria="language"><button type="button" class="language-button" id="card-language-en" data-language-choice="en" aria-label="English">EN</button><button type="button" class="language-button" id="card-language-zh" data-language-choice="zh-CN" aria-label="简体中文">简</button><button type="button" class="language-button" id="card-language-zh-tw" data-language-choice="zh-TW" aria-label="繁體中文">繁</button></div><div class="strip-mode-options" role="group" data-i18n-aria="stripMode"><button type="button" class="strip-mode-button" id="strip-mode-full" data-strip-mode-choice="full"><svg viewBox="0 0 14 10" aria-hidden="true"><path d="M1 5h2.2M4.8 5h2.2"/><circle cx="11" cy="5" r="1.9"/></svg></button><button type="button" class="strip-mode-button" id="strip-mode-minimal" data-strip-mode-choice="minimal"><svg viewBox="0 0 14 10" aria-hidden="true"><circle cx="4.5" cy="5" r="2.1"/><path d="M8.6 5h3.8"/></svg></button></div></div>');
     $('context-card').append(languageRow);
-    if(window.__agPulseUpdateFactory&&window.agPulseHost.updatePlugin)updateMenu=window.__agPulseUpdateFactory({root,row:footerActions,language,setMarkup,request:input=>window.agPulseHost.updatePlugin(input),onOpen:hide,onStateChange:()=>{if(!disposed&&!instDisposed)render();}});
+    if(window.__agPulseUpdateFactory&&window.agPulseHost.updatePlugin)updateMenu=window.__agPulseUpdateFactory({root,row:languageRow,language,setMarkup,request:input=>window.agPulseHost.updatePlugin(input),onOpen:hide});
     const saveNote=document.createElement('p');saveNote.className='footnote';saveNote.id='language-save-note';languageRow.after(saveNote);
     const guide=document.createElement('section');guide.className='language-guide';guide.id='language-guide';guide.hidden=true;guide.setAttribute('role','region');guide.setAttribute('aria-label','Language / 語言 / 语言');
     setMarkup(guide,'<div class="guide-heading"><strong>Language <span>/ 语言</span></strong><button type="button" id="guide-close" aria-label="Dismiss language tip / 关闭语言提示" title="Dismiss / 关闭">×</button></div><button type="button" id="guide-open"><span><span>Switch in context details</span><span lang="zh-CN">在上下文详情中切换语言</span></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><p class="footnote" id="guide-save-note"></p>');
@@ -1109,6 +1181,8 @@ module.exports = function installAgPulseInlineWidget() {
     for(const button of root.querySelectorAll('.refresh'))button.addEventListener('click',()=>refreshManually(false));
     for(const button of root.querySelectorAll('[data-language-choice]'))button.addEventListener('click',()=>void preferences.choose(button.dataset.languageChoice));
     for(const button of root.querySelectorAll('[data-speed-style-choice]'))button.addEventListener('click',()=>void speedStyle.choose(button.dataset.speedStyleChoice));
+    $('strip-toggle')?.addEventListener('click',()=>{hide();void stripMode.choose(stripMode.mode==='minimal'?'full':'minimal');});
+    for(const button of root.querySelectorAll('[data-strip-mode-choice]'))button.addEventListener('click',()=>void stripMode.choose(button.dataset.stripModeChoice));
     if(window.__agPulseUsageFactory){
       const section=document.createElement('div');section.id='usage-entry';section.hidden=true;
       setMarkup(section,'<div class="usage-summary"><div><div class="usage-label" id="usage-today-label"></div><div class="usage-val"><strong id="usage-today"></strong><span class="usage-unit" id="usage-today-unit">toks</span></div></div><div><div class="usage-label" id="usage-month-label"></div><div class="usage-val"><strong id="usage-month"></strong><span class="usage-unit" id="usage-month-unit">toks</span></div></div></div><button type="button" id="open-usage"><span id="usage-open-label"></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button>');$('cache-card').append(section);
@@ -1188,14 +1262,17 @@ module.exports = function installAgPulseInlineWidget() {
     }
     hidden(root.querySelector('[data-card="speed"]'),false);
     hidden(root.querySelector('[data-card="cache"]'),false);
+    const isReconnectError=e=>e==='等待 Antigrative Dashboard 重新连接'||e==='等待 AG Pulse 重新连接'||e==='Waiting to reconnect'||e===t('reconnecting');
+    const waitingInitial=Boolean((data.transient||(!hydrated&&data.connection==='offline'&&(!data.error||isReconnectError(data.error))))&&!speed&&!groups.length);
     const context=speed?.context,hasCapacity=typeof context?.usedFraction==='number';
+    hasContextPercent=hasCapacity;
     const ringColor=!hasCapacity?'var(--pulse-ring)':context.usedFraction>=0.9?'var(--pulse-danger)':context.usedFraction>=0.75?'var(--pulse-warning)':'var(--pulse-ring)';
     hidden(root.querySelector('[data-card="context"]'),false);
     const empty=(surface&&!surface.useSharedComposer?surface.conversationState?.(composer).status==='new':composer?.kind==='main'&&(!lastConversation||(!speed?.requests&&!speed?.steps&&!hasCapacity)))&&data.connection==='live'&&!data.sessionError&&!collectionActive;
     text('context-percent',hasCapacity?`${Math.round(context.usedFraction*100)}%`:'—');
     style($('context-ring'),'--used-angle',`${hasCapacity?Math.min(1,context.usedFraction)*360:0}deg`);
     style($('context-ring'),'--ring-color',ringColor);
-    text('context-summary',hasCapacity?t('contextUsed',{used:Math.round(context.usedFraction*100),remaining:Math.round(context.remainingFraction*100)}):collectionActive?'—':t(empty?'waitingRequest':'contextUnknown'));
+    text('context-summary',hasCapacity?t('contextUsed',{used:Math.round(context.usedFraction*100),remaining:Math.round(context.remainingFraction*100)}):collectionActive?'—':t(waitingInitial?'connecting':empty?'waitingRequest':'contextUnknown'));
     text('context-tokens',context?t('contextTokens',{used:compact(context.usedTokens),max:context.maxTokens===null?'—':compact(context.maxTokens)}):'—');
     text('context-model',context?.model||'—');
     const transcript=speed?.transcriptStats;
@@ -1210,18 +1287,10 @@ module.exports = function installAgPulseInlineWidget() {
         hidden(compactionPill,true);
       }
     }
-    const updateMenuState=updateMenu?.getState?.();
-    const updateSuppressed=['current','installed','reloading'].includes(updateMenuState?.state);
-    const hasUpdate=!updateSuppressed&&Boolean(updateMenuState?.state==='available'||data?.update?.available);
-    const updateVer=(updateMenuState?.state==='available'?updateMenuState.latestVersion:data?.update?.latestVersion)||null;
-    updateMenu?.syncHint?.({available:hasUpdate,latestVersion:updateVer});
     const ctxChip=root.querySelector('[data-card="context"]');
     if(ctxChip){
       const compSuffix=compactions!==null&&compactions>0?` · 🗜 ${t('contextCompactionCount',{n:compactions})}`:'';
-      const updateSuffix=hasUpdate&&updateVer?` · v${updateVer}`:'';
-      const baseTip=hasCapacity?`Ctx ${Math.round(context.usedFraction*100)}% (${compact(context.usedTokens)} / ${compact(context.maxTokens)})${compSuffix}`:(compSuffix?`Ctx${compSuffix}`:'');
-      attribute(ctxChip,'data-update-available',hasUpdate?'true':null);
-      attribute(ctxChip,'title',baseTip?(baseTip+updateSuffix):(hasUpdate&&updateVer?`v${updateVer}`:null));
+      attribute(ctxChip,'title',hasCapacity?`Ctx ${Math.round(context.usedFraction*100)}% (${compact(context.usedTokens)} / ${compact(context.maxTokens)})${compSuffix}`:(compSuffix?`Ctx${compSuffix}`:null));
     }
     style($('context-fill'),'width',hasCapacity?`${Math.min(1,context.usedFraction)*100}%`:'0%');
     style($('context-fill'),'background',hasCapacity&&context.usedFraction>=.9?'var(--pulse-danger)':hasCapacity&&context.usedFraction>=.75?'var(--pulse-warning)':'');
@@ -1324,16 +1393,24 @@ module.exports = function installAgPulseInlineWidget() {
         attribute(paceBadge,'title',pace.title);
       }
     }
-    const quotaError=language.errorMessage(data.error);
+    const quotaError=data.transient||isReconnectError(data.error)?'':language.errorMessage(data.error);
     for(const [window,name]of[['5h','five'],['weekly','week']]){
       hidden($(`${name}-quota-section`),!visibleQuotaWindows.includes(window));
       const heading=t(window==='weekly'&&isArgon?'argonWeek':name);
       text(`${name}-quota-title`,heading);attribute($(`${name}-quota-section`),'aria-label',heading);attribute($(`${name}-track`),'aria-label',heading);
       const b=group?.windows?.[window],remaining=language.quotaRemaining(b),balance=b?.disabled?t('unavailableQuota'):pct(remaining);
       const forecast=language.quotaForecast(b,window,paceNow);
-      const barBg=remaining!==null&&remaining<.05?'var(--pulse-danger)':'';
+      const barBg=remaining!==null&&remaining<.05?'var(--pulse-danger)':(remaining!==null&&remaining<.2)||forecast?.willExhaust?'var(--pulse-warning)':'';
+      // Solid fill is always the real balance; the hatched tail marks what the
+      // current pace is expected to consume before the window resets.
+      const hatch=Boolean(forecast?.forecastReady&&remaining!==null&&forecast.projectedRemaining<remaining-0.005);
       text(name,balance);text(`${name}-balance`,balance);
       style($(`${name}-fill`),'width',remaining!==null?`${remaining*100}%`:'0%');style($(`${name}-fill`),'background',barBg);
+      const projEl=$(`${name}-projected-fill`);
+      if(projEl){
+        style(projEl,'left',hatch?`${forecast.projectedRemaining*100}%`:'0%');
+        style(projEl,'width',hatch?`${(remaining-forecast.projectedRemaining)*100}%`:'0%');
+      }
       const forecastEl=$(`${name}-forecast`),fTextEl=$(`${name}-forecast-text`);
       if(forecastEl&&fTextEl){
         const showF=Boolean(forecast&&typeof forecast.timeRemaining==='number');
@@ -1352,12 +1429,30 @@ module.exports = function installAgPulseInlineWidget() {
       attribute($(`${name}-track`),'aria-valuenow',remaining!==null?remaining*100:null);attribute($(`${name}-track`),'aria-valuemin','0');attribute($(`${name}-track`),'aria-valuemax','100');
       const isFirstWindow=window===visibleQuotaWindows[0];
       const subagentNote=composer?.kind==='subagent'&&isFirstWindow?t('accountQuota'):'';
-      const windowNote=quotaError&&!group?'':b?.disabled?t('disabledQuota'):!b?.available?t('noQuota'):'';
+      const windowNote=quotaError&&!group?'':waitingInitial?(isFirstWindow?t('loadingQuota'):''):b?.disabled?t('disabledQuota'):!b?.available?t('noQuota'):'';
       const note=[subagentNote,windowNote].filter(Boolean).join(' ');
       text(`${name}-note`,note);hidden($(`${name}-note`),!note);
       const usageRow=$(`${name}-usage`);
       if(usageRow){
-        const winUsage=group?.id&&!b?.disabled&&b?.available?data.usage?.quotaWindows?.[`${group.id}:${window}`]:null;
+        const usageAccount=data.usage?.activeAccountKey??null;
+        if(data.usage&&usageAccount!==lastQuotaUsageAccount){lastQuotaUsageAccount=usageAccount;lastQuotaWindowUsage.clear();}
+        const winKey=group?.id?`${group.id}:${window}`:null;
+        const resetMs=typeof b?.resetAt==='string'?Date.parse(b.resetAt):NaN;
+        const resetMinute=Number.isFinite(resetMs)?Math.round(resetMs/60000):null;
+        const rawWinUsage=winKey&&!b?.disabled&&b?.available?data.usage?.quotaWindows?.[winKey]:null;
+        let winUsage=rawWinUsage&&typeof rawWinUsage.observedTokens==='number'&&rawWinUsage.observedTokens>0?rawWinUsage:null;
+        if(winKey&&winUsage){
+          lastQuotaWindowUsage.set(winKey,{resetMinute,usage:winUsage});
+        }else if(winKey&&!b?.disabled&&b?.available&&(data.usage?.summaryStale===true||!data.usage)&&resetMinute!==null){
+          const prev=lastQuotaWindowUsage.get(winKey);
+          if(prev&&prev.resetMinute!==null&&Math.abs(prev.resetMinute-resetMinute)<=2){
+            const usedFrac=typeof remaining==='number'?Math.max(0,Math.min(1,1-remaining)):null;
+            const estFull=prev.usage.estimatedFullTokens??(prev.usage.observedTokens>0&&usedFrac!==null&&usedFrac>=0.05?Math.round(prev.usage.observedTokens/usedFrac):null);
+            winUsage={...prev.usage,estimatedFullTokens:estFull};
+          }
+        }else if(winKey&&data.usage&&data.usage.summaryStale!==true){
+          lastQuotaWindowUsage.delete(winKey);
+        }
         const showUsage=Boolean(winUsage&&typeof winUsage.observedTokens==='number'&&winUsage.observedTokens>0);
         hidden(usageRow,!showUsage);
         if(showUsage){
@@ -1412,7 +1507,7 @@ module.exports = function installAgPulseInlineWidget() {
           if(valEl&&valEl.textContent!==val)valEl.textContent=val;
           if(fillEl){
             style(fillEl,'width',rem!==null?`${rem*100}%`:'0%');
-            style(fillEl,'background',rem!==null&&rem<.05?'var(--pulse-danger)':'');
+            style(fillEl,'background',rem!==null&&rem<.05?'var(--pulse-danger)':rem!==null&&rem<.2?'var(--pulse-warning)':'');
           }
           const tag=w==='5h'?'5h':t(sibArgon?'argonWeek':'weekShort');
           tipParts.push(`${tag} ${val}`);
@@ -1471,8 +1566,8 @@ module.exports = function installAgPulseInlineWidget() {
     pending=true;lastFetch=Date.now();
     refreshRequest=(async()=>{
       const composerModel=currentComposerModel();
-      try{const result=await window.agPulseHost.getMetrics({conversationId:conversation,force,...(quotaRefresh?{quotaRefresh:true}:{}),...(composerModel?{composerModel}:{}),...(syncUsage?{usageSync:true}:{})});if(!current())return;if(force||quotaRefresh)lastQuotaHoverAt=Date.now();node.style.visibility=result.enabled===false?'hidden':'';if(result.enabled===false){hide();return;}if(!conversation||result.speed&&result.speed.conversationId!==conversation)result.speed=null;if(result.usage?.scope&&data?.usage?.scope===usageScope.scope&&result.usage.scope!==usageScope.scope)result.usage=data.usage;data=result;hydrated=true;if(result.preferences){syncGuide(result.preferences);preferences.sync(result.preferences);guideReady=!preferences.error;}if(Object.hasOwn(result,'theme'))themeController?.setHostTheme(result.theme);render();}
-      catch{if(current()&&data){data.connection='stale';data.error=t('reconnecting');render();}}
+      try{const result=await window.agPulseHost.getMetrics({conversationId:conversation,force,...(quotaRefresh?{quotaRefresh:true}:{}),...(composerModel?{composerModel}:{}),...(syncUsage?{usageSync:true}:{})});if(!current())return;if(force||quotaRefresh)lastQuotaHoverAt=Date.now();node.style.visibility=result.enabled===false?'hidden':'';if(result.enabled===false){hide();return;}if(result.transient&&data&&(hydrated||data.speed||data.groups?.length)){data={...data,connection:'stale',error:null};render();return;}if(!conversation||result.speed&&result.speed.conversationId!==conversation)result.speed=null;if(result.usage?.scope&&data?.usage?.scope===usageScope.scope&&result.usage.scope!==usageScope.scope)result.usage=data.usage;data=result;if(!result.transient)hydrated=true;if(result.preferences){syncGuide(result.preferences);preferences.sync(result.preferences);guideReady=!preferences.error;}if(Object.hasOwn(result,'theme'))themeController?.setHostTheme(result.theme);render();}
+      catch{if(current()&&data){data={...data,connection:'stale',error:null};render();}}
       finally{if(epoch===requestEpoch){pending=false;refreshRequest=null;}}
     })();
     return refreshRequest;
@@ -1493,6 +1588,7 @@ module.exports = function installAgPulseInlineWidget() {
     onLocaleChanged(){if(root){localize();render();tick();position();}},
     onSpeedStyleChanged(){if(root){attribute(node,'data-speed-style',speedStyle.style);localize();paintSpeed([],'idle',0.36,false);render();tick();position();}},
     onUsageScopeChanged(){if(root){render();}},
+    onStripModeChanged(){if(root){if(stripMode.mode==='minimal'&&cardName&&cardName!=='context')hide();localize();densityProbe=null;if(!parked&&composer){fit();position();}}},
     syncUsageGuide(){usageDashboard?.syncGuideDismissed();},
     poll(){
       if(instDisposed||!node)return;
@@ -1563,7 +1659,7 @@ module.exports = function installAgPulseInlineWidget() {
   const timerId=setInterval(()=>{mount();for(const inst of instances)inst.poll();},1000);
   window.__agPulseDispose=()=>{
     disposed=true;
-    clearInterval(timerId);if(layoutFrame!==null)cancelAnimationFrame(layoutFrame);observer.disconnect();preferences.dispose();
+    clearInterval(timerId);if(layoutFrame!==null)cancelAnimationFrame(layoutFrame);observer.disconnect();preferences.dispose();speedStyle.dispose();usageScope.dispose();stripMode.dispose();
     for(const inst of instances.splice(0))inst.dispose();
     document.removeEventListener('keydown',onKey);document.removeEventListener('pointerdown',onPointer);document.removeEventListener('focusin',onFocus);
     document.removeEventListener('scroll',scheduleLayout,true);window.removeEventListener('resize',scheduleLayout);

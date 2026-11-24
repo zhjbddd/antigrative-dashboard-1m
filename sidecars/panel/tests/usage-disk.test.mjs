@@ -412,26 +412,6 @@ test('full recovery queue releases stale source guards and retains active source
  const value=await summary(ledger);assert.equal(value.requests,3);assert.equal(value.totalTokens,1800);
 });
 
-test('SQLite disk worker merges equivalent legacy model names on read without mutating sqlite files',async t=>{
- const {root,ledger}=await fixture(t),file=join(root,'legacy-models.sqlite');
- const make=(key,model)=>({...row(key,100),model});
- job(file,[
-  make('m1','claude-sonnet-5-5-medium'),make('m2','Claude Sonnet 5.5 (Medium)'),
-  make('e1','claude-sonnet-5-5'),make('e2','word/claude-sonnet-5.5'),
-  make('o1','MODEL_PLACEHOLDER_M26'),make('o2','word/claude-opus-4-6-thinking'),
-  make('g1','word/gpt-6.1-sol'),make('g2','gpt-6.1-sol'),
- ]);
- await ledger.ingestDisk(scope,id,file);
- const sqliteFile=ledger.file(scope,id).replace(/\.json$/,'.sqlite'),before=await readFile(sqliteFile);
- const result=await summary(ledger);
- assert.deepEqual(await readFile(sqliteFile),before);
- assert.deepEqual(result.models.sort(),['Claude Opus 4.6 (Thinking)','Claude Sonnet 5.5','Claude Sonnet 5.5 (Medium)','GPT-6.1 Sol']);
- assert.equal(result.days[0].models['Claude Sonnet 5.5 (Medium)'].requests,2);
- assert.equal(result.days[0].models['Claude Sonnet 5.5'].requests,2);
- assert.equal(result.days[0].models['Claude Opus 4.6 (Thinking)'].requests,2);
- assert.equal(result.days[0].models['GPT-6.1 Sol'].requests,2);
-});
-
 test('all-local disk worker aggregates across SQLite and JSON accounts and isolates quotaWindows',async t=>{
  const {root,ledger}=await fixture(t),otherAcct='b'.repeat(64);await mkdir(join(ledger.directory,otherAcct),{recursive:true});
  const file=join(root,'acct-a.sqlite');

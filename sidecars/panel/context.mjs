@@ -9,6 +9,13 @@ const aliases=new Map([
  ['model_placeholder_m318','Gemini 3.8 Flash (High)'],
  ['model_placeholder_m319','Gemini 3.8 Flash (Medium)'],
  ['model_placeholder_m320','Gemini 3.8 Flash (Low)'],
+ ['model_placeholder_m322','Gemini 3.8 Flash (Tiered)'],
+ ['model_placeholder_m400','Claude Opus 5.5 (Low)'],
+ ['model_placeholder_m401','Claude Opus 5.5 (Medium)'],
+ ['model_placeholder_m402','Claude Opus 5.5 (High)'],
+ ['model_placeholder_m403','Claude Sonnet 5.5 (Low)'],
+ ['model_placeholder_m404','Claude Sonnet 5.5 (Medium)'],
+ ['model_placeholder_m405','Claude Sonnet 5.5 (High)'],
  ['model_placeholder_m417','Gemini 4 Argon (High)'],
  ['model_placeholder_m418','Gemini 4 Argon (Medium)'],
  ['model_placeholder_m419','Gemini 4 Argon (Low)'],
@@ -21,12 +28,19 @@ const aliases=new Map([
  ['model_placeholder_m528','Gemini 4 Hydrogen (XHigh)'],
  ['model_placeholder_m530','Gemini 4 Hydrogen (High)'],
  ['model_placeholder_m531','Gemini 4 Hydrogen (XHigh)'],
+ ['model_placeholder_m532','Gemini 4 Neon (High)'],
+ ['model_placeholder_m533','Gemini 4 Neon (Medium)'],
+ ['model_placeholder_m534','Gemini 4 Neon (Low)'],
+ ['model_placeholder_m535','Gemini 4 Neon (XHigh)'],
+ ['model_placeholder_m537','Orchestrator (Neon)'],
+ ['model_placeholder_m578','Gemini 4 Hydrogen (Sonar)'],
  ['model_placeholder_m667','Orchestrator (Carbon)'],
  ['model_placeholder_m669','Gemini 4 Hydrogen (Orchestrator)'],
  ['model_placeholder_m681','Orchestrator (Argon)'],
  ['gemini-flash-worker-agy','Gemini 4 Hydrogen (Orchestrator)'],
  ['gemini-pro-orchestrator','Orchestrator (Carbon)'],
  ['gemini-pro-orchestrator-argon','Orchestrator (Argon)'],
+ ['gemini-pro-orchestrator-neon','Orchestrator (Neon)'],
  ['model_google_gemini_2_5_flash','Gemini 2.5 Flash'],
  ['model_google_gemini_2_5_flash_lite','Gemini 2.5 Flash Lite'],
  ['model_google_gemini_2_5_flash_thinking','Gemini 2.5 Flash (Thinking)'],
@@ -60,8 +74,7 @@ export function registerCatalogModels(response,{checkedAt=new Date().toISOString
  return countRegistered;
 }
 // Placeholder aliases above were checked against the installed host's model
-// catalog (M318-M320, M35, M26 on 2026-10-14; M18-M681/Orchestrator on 2026-11-18).
-// Unknown placeholders (such as M322) stay unguessed rather than inventing a family.
+// catalog (M318-M320, M35, M26 on 2026-10-14; M18-M681 on 2026-11-18; M400-M405, M532-M578 on 2026-11-25).
 const EFFORT='n|xhigh|extra-high|extrahigh|extra|high|medium|low|max|thinking';
 const cap=s=>s[0].toUpperCase()+s.slice(1);
 function formatEffort(effort){
@@ -93,9 +106,9 @@ function identify(model){
  const normalized=candidate.toLowerCase().replace(/@(?:default|\d{8})(?=$|[-_\s()])/g,'').replace(/(\d)[._-](\d)/g,'$1.$2').replace(/[\s()_]+/g,'-').replace(/-+$/,'');
  let match=normalized.match(/^gemini-3\.8-flash(?:-(n|high|medium|low|tiered))?$/);
  if(match)return {key:'gemini-3.8-flash',display:'Gemini 3.8 Flash'+formatEffort(match[1])};
- match=normalized.match(new RegExp(`^gemini-4-(hydrogen|argon|carbon)(?:-(?:tiered-)?(${EFFORT}|orchestrator|sonar))?$`));
+ match=normalized.match(new RegExp(`^gemini-4-(neon|hydrogen|argon|carbon)(?:-(?:tiered-)?(${EFFORT}|orchestrator|sonar))?$`));
  if(match)return {key:`gemini-4-${match[1]}`,display:`Gemini 4 ${cap(match[1])}`+formatEffort(match[2])};
- match=normalized.match(new RegExp(`^orchestrator-(carbon|argon)(?:-(${EFFORT}))?$`));
+ match=normalized.match(new RegExp(`^orchestrator-(neon|carbon|argon)(?:-(${EFFORT}))?$`));
  if(match)return {key:`orchestrator-${match[1]}`,display:`Orchestrator (${cap(match[1])})`+formatEffort(match[2])};
  match=normalized.match(new RegExp(`^gemini-3\\.5-flash-lite(?:-(${EFFORT}))?$`));
  if(match)return {key:'gemini-3.5-flash-lite',display:'Gemini 3.5 Flash Lite'+formatEffort(match[1])};
@@ -114,8 +127,6 @@ function identify(model){
  if(match)return {key:null,display:`Claude ${cap(match[2])} ${match[1]}`+formatEffort(match[3])};
  match=normalized.match(/^gpt-oss-120b(?:-(high|medium|low))?$/);
  if(match)return {key:'gpt-oss-120b',display:'GPT-OSS 120B'+formatEffort(match[1])};
- // Preserve clean display normalization for retired telemetry IDs without
- // publishing speculative provider context capacities.
  match=normalized.match(new RegExp(`^gpt-6\\.1-sol(?:-(${EFFORT}))?$`));
  if(match)return {key:null,display:'GPT-6.1 Sol'+formatEffort(match[1])};
  match=normalized.match(new RegExp(`^gpt-6-astra(?:-(${EFFORT}))?$`));
@@ -134,18 +145,17 @@ export function modelContextReference(model){
  if(!key)return null;
  if(catalogRefs.has(key))return catalogRefs.get(key);
  if(key==='gemini-3.8-flash')return {tokens:1048576,label:'1,048,576',kind:'provider-input-limit',source:'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash',checkedAt:'2026-10-14'};
- if(/^gemini-4-(hydrogen|argon|carbon)$/.test(key))return {tokens:1048576,label:'1,048,576',kind:'provider-context-window',source:`https://aistudio.google.com/docs/models/${key}`,checkedAt:'2026-11-13'};
- if(/^orchestrator-(carbon|argon)$/.test(key))return {tokens:1048576,label:'1,048,576',kind:'model-catalog',source:'Antigravity GetAvailableModels',checkedAt:'2026-11-18'};
+ if(/^gemini-4-(neon|hydrogen|argon|carbon)$/.test(key))return {tokens:1048576,label:'1,048,576',kind:'provider-context-window',source:`https://aistudio.google.com/docs/models/${key}`,checkedAt:'2026-11-25'};
+ if(/^orchestrator-(neon|carbon|argon)$/.test(key))return {tokens:1048576,label:'1,048,576',kind:'model-catalog',source:'Antigravity GetAvailableModels',checkedAt:'2026-11-25'};
  if(/^gemini-(?:3-flash|3\.1-flash-lite|3\.5-flash-lite|2\.5-(?:pro|flash|flash-lite))$/.test(key))return {tokens:1048576,label:'1,048,576',kind:'model-catalog',source:'Antigravity GetAvailableModels',checkedAt:'2026-11-18'};
  if(key==='gemini-3.1-flash-image')return {tokens:65536,label:'65,536',kind:'model-catalog',source:'Antigravity GetAvailableModels',checkedAt:'2026-11-18'};
  if(key==='gpt-oss-120b')return {tokens:131072,label:'131,072',kind:'provider-context-window',source:'https://developers.openai.com/api/docs/models/gpt-oss-120b',checkedAt:'2026-10-14'};
- if(/^claude-(?:(?:sonnet|opus)-(?:4\.6|5\.5)|opus-4\.[78]|haiku-5\.5)$/.test(key)){
-  const legacy=/^claude-(sonnet|opus)-(4\.6|5\.5)$/.test(key);
+ if(/^claude-(sonnet|opus)-5\.5$/.test(key))return {tokens:1000000,label:'1,000,000',kind:'model-catalog',source:'Antigravity GetAvailableModels',checkedAt:'2026-11-25'};
+ if(/^claude-(?:(?:sonnet|opus)-4\.6|opus-4\.[78]|haiku-5\.5)$/.test(key)){
+  const legacy=/^claude-(sonnet|opus)-4\.6$/.test(key);
   return {tokens:null,label:'1M',kind:'provider-context-window',source:legacy?`https://platform.claude.com/docs/en/models/${key.slice(7).replace('.', '-')}/overview`:'https://platform.claude.com/docs/en/build-with-claude/context-windows',checkedAt:legacy?'2026-10-14':'2026-11-14'};
  }
  if(/^claude-(sonnet|opus|haiku)-4\.5$/.test(key))return {tokens:null,label:'200K',kind:'provider-context-window',source:'https://platform.claude.com/docs/en/build-with-claude/context-windows',checkedAt:'2026-11-14'};
- // Claude's inspected pages state "1M" or "200K"; preserve those literal
- // labels rather than inventing binary/decimal conversions.
  return null;
 }
 export function modelContextCapacity(model){return modelContextReference(model)?.tokens??null;}

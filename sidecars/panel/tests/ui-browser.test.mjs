@@ -96,8 +96,8 @@ test('font sync, scope switching and quota window reference render end-to-end in
   let child = null, cdp = null, server = null;
   try {
 
-  const [i18nSrc, themeSrc, usageSrc, updateSrc, widgetSrc, surfaceSrc, stylesCss, formatMjs] = await Promise.all([
-    read('compat/i18n.cjs'), read('compat/theme.cjs'), read('compat/usage-ui.cjs'),
+  const [i18nSrc, themeSrc, pricingSrc, usageSrc, updateSrc, widgetSrc, surfaceSrc, stylesCss, formatMjs] = await Promise.all([
+    read('compat/i18n.cjs'), read('compat/theme.cjs'), read('compat/pricing.cjs'), read('compat/usage-ui.cjs'),
     read('compat/update-ui.cjs'), read('compat/inline-widget.cjs'), read('ide/surface.cjs'),
     read('sidecars/panel/styles.css'), read('sidecars/panel/format.mjs'),
   ]);
@@ -114,8 +114,9 @@ test('font sync, scope switching and quota window reference render end-to-end in
     'gemini-4-argon-medium', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium',
     'claude-opus-5.5-medium', 'gemini-flash', 'orchestrator-argon',
     'gemini-3.8-flash', 'gemini-3.8-flash-tiered', 'gpt-5.4-high', 'claude-sonnet-4.6',
-    'claude-opus-4.5', 'gemini-3.5-pro', 'gemini-3.5-flash', 'gpt-5.4-mini',
-    'o3-pro', 'deepseek-r1',
+    'Claude Sonnet 4.6 (Thinking)', 'Gemini 4 Neon (High)', 'Gemini 4 Neon (XHigh)',
+    'Orchestrator (Neon)', 'GPT-OSS 120B (Medium)', 'claude-opus-4.5', 'gemini-3.5-pro',
+    'gemini-3.5-flash', 'gpt-5.4-mini', 'o3-pro', 'deepseek-r1', 'qwen-3-coder', 'llama-4-maverick',
   ];
   const usageData = (overrideScope = null) => {
     const scope = overrideScope === 'account' || overrideScope === 'local' ? overrideScope : prefs.usageScope;
@@ -171,8 +172,17 @@ test('font sync, scope switching and quota window reference render end-to-end in
       },
     };
   };
-  const metricsPayload = (overrideScope = null) => ({
-    connection: 'live',
+  let staleError = null;
+  let transientOffline = false;
+  const metricsPayload = (overrideScope = null) => (transientOffline ? {
+    connection: 'offline',
+    error: '等待 Antigrative Dashboard 重新连接',
+    speed: null,
+    groups: [],
+    transient: true,
+  } : {
+    connection: staleError ? 'stale' : 'live',
+    ...(staleError ? { error: staleError } : {}),
     theme: panelTheme,
     preferences: prefs,
     serverTime: new Date().toISOString(),
@@ -180,7 +190,10 @@ test('font sync, scope switching and quota window reference render end-to-end in
     groups: [{ id: 'gemini', name: 'Gemini', windows: { '5h': { available: true, remaining: 0.874, resetAt: reset5h }, weekly: { available: true, remaining: 0.399, resetAt: resetWk } } }],
     usage: usageData(overrideScope),
     ...(integrationState ? { integration: integrationState } : {}),
-    speed: trajectoryMetrics({ trajectory: { cascadeId: id, steps: [{ type: 'USER_INPUT' }], generatorMetadata: [{ chatModel: { modelDisplayName: 'Gemini 4 Hydrogen (XHigh)', chatStartMetadata: { contextWindowMetadata: { estimatedTokensUsed: 100000, maxContextTokens: 512000 } }, usage: billionSpeed ? { messageId: 'm2', inputTokens: '80000000', cacheReadTokens: '1150000000', outputTokens: '4567890', responseOutputTokens: '4000000', apiProvider: 'API_PROVIDER_GOOGLE_GEMINI' } : { messageId: 'm1', inputTokens: '5384106', cacheReadTokens: '55937971', outputTokens: '473719', responseOutputTokens: '400000', apiProvider: 'API_PROVIDER_GOOGLE_GEMINI' }, streamingDuration: '2s' } }] } }),
+    speed: {
+      ...trajectoryMetrics({ trajectory: { cascadeId: id, steps: [{ type: 'USER_INPUT' }], generatorMetadata: [{ chatModel: { modelDisplayName: 'Gemini 4 Hydrogen (XHigh)', chatStartMetadata: { contextWindowMetadata: { estimatedTokensUsed: 100000, maxContextTokens: 512000 } }, usage: billionSpeed ? { messageId: 'm2', inputTokens: '80000000', cacheReadTokens: '1150000000', outputTokens: '4567890', responseOutputTokens: '4000000', apiProvider: 'API_PROVIDER_GOOGLE_GEMINI' } : { messageId: 'm1', inputTokens: '5384106', cacheReadTokens: '55937971', outputTokens: '473719', responseOutputTokens: '400000', apiProvider: 'API_PROVIDER_GOOGLE_GEMINI' }, streamingDuration: '2s' } }] } }),
+      transcriptStats: { version: 1, status: 'ready', complete: true, userTokens: 100, assistantTokens: 200, toolTokens: 50, systemTokens: 10, totalTokens: 360, matchedSteps: 1, compactionMarkers: 2, imageSteps: 0 },
+    },
   });
   const inlineHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
     body{margin:0;padding:40px;background:#17181a;color:#ddd;font:13px "Segoe UI",sans-serif}
@@ -205,6 +218,7 @@ test('font sync, scope switching and quota window reference render end-to-end in
     window.__agPulseTestSurface = (${extract(surfaceSrc)})();
     window.__agPulseI18nFactory = (${extract(i18nSrc)});
     window.__agPulseThemeFactory = (${extract(themeSrc)});
+    window.__agPulsePricingFactory = (${extract(pricingSrc)});
     window.__agPulseUsageFactory = (${extract(usageSrc)});
     window.__agPulseUpdateFactory = (${extract(updateSrc)});
     (${extract(widgetSrc)})();
@@ -277,6 +291,7 @@ test('font sync, scope switching and quota window reference render end-to-end in
   assert.equal(quotaText.fiveHidden, false);
   assert.equal(quotaText.fiveVal, '81.1M toks (约 644.2M 满额)');
   assert.equal(quotaText.weekVal, '129.9M toks (约 216.2M 满额)');
+  assert.equal(await evalJs(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('context-compaction-pill').textContent`), '🗜 2 次');
 
   // Cache card compact breakdown with exact title tooltips + zero horizontal ellipsis
   const cacheCard = await evalJs(`() => {
@@ -476,11 +491,88 @@ test('font sync, scope switching and quota window reference render end-to-end in
     return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
   }`);
 
+  const expectedMergedStressCount = 18;
   await evalJs(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('usage-dashboard').firstElementChild.shadowRoot.getElementById('details-tab').click()`);
   await waitUntil(`() => {
     const vs = document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('usage-dashboard').firstElementChild.shadowRoot;
-    return vs.getElementById('details').hidden === false && vs.querySelectorAll('#legend button').length === ${stressModelList.length} && vs.querySelectorAll('#table-body tr').length === ${stressModelList.length};
-  }`, 'details tab with 22 model rows visible');
+    return vs.getElementById('details').hidden === false && vs.querySelectorAll('#legend button').length === ${expectedMergedStressCount} && vs.querySelectorAll('#table-body tr').length === ${expectedMergedStressCount};
+  }`, 'details tab with merged thinking-tier model rows visible');
+
+  // Verify thinking tiers merge across legend/chart/table without merging distinct variants/roles,
+  // and hovering a multi-tier table row shows the lightweight tier breakdown tooltip.
+  const tierMergeCheck = await evalJs(`() => {
+    const vs = document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('usage-dashboard').firstElementChild.shadowRoot;
+    const legendLabels = [...vs.querySelectorAll('#legend button')].map(b => b.textContent.trim());
+    const flashRow = vs.querySelector('#table-body tr[data-model="gemini 3.8 flash"]');
+    const sonnetRow = vs.querySelector('#table-body tr[data-model="claude sonnet 4.6"]');
+    const gptRow = vs.querySelector('#table-body tr[data-model="gpt 5.4"]');
+    const hydrogenRow = vs.querySelector('#table-body tr[data-model="gemini 4 hydrogen"]');
+    const deepseekRow = vs.querySelector('#table-body tr[data-model="deepseek r1"]');
+    const tableHeaders = [...vs.querySelectorAll('#table-head th')].map(n => n.textContent.trim());
+    flashRow.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, clientX: 260 }));
+    const tip = vs.getElementById('tip');
+    const flashTip = {
+      hidden: tip.hidden,
+      title: tip.querySelector('.tip-title')?.textContent || '',
+      tiers: [...tip.querySelectorAll('.tip-model')].map(n => n.textContent.trim()),
+    };
+    flashRow.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    const hiddenAfterLeave = tip.hidden;
+    sonnetRow.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, clientX: 260 }));
+    const sonnetTip = {
+      hidden: tip.hidden,
+      title: tip.querySelector('.tip-title')?.textContent || '',
+      tiers: [...tip.querySelectorAll('.tip-model')].map(n => n.textContent.trim()),
+    };
+    sonnetRow.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    gptRow.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, clientX: 260 }));
+    const singleTierTipHidden = tip.hidden;
+    gptRow.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    hydrogenRow.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, clientX: 260 }));
+    const hydrogenTip = {
+      hidden: tip.hidden,
+      title: tip.querySelector('.tip-title')?.textContent || '',
+      tiers: [...tip.querySelectorAll('.tip-model')].map(n => n.textContent.trim()),
+    };
+    hydrogenRow.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    return {
+      legendLabels,
+      tableHeaders,
+      totalMetrics: [...vs.querySelectorAll('#totals .metric')].map(m => ({ label: m.querySelector('label')?.textContent?.trim(), value: m.querySelector('.value')?.textContent?.trim() })),
+      flashTotal: flashRow?.children[1]?.textContent || '',
+      flashCost: flashRow?.querySelector('.col-cost')?.textContent || '',
+      deepseekCost: deepseekRow?.querySelector('.col-cost')?.textContent || '',
+      flashTip,
+      sonnetTip,
+      hydrogenTip,
+      hiddenAfterLeave,
+      singleTierTipHidden,
+    };
+  }`);
+  assert.deepEqual(tierMergeCheck.tableHeaders, ['模型', '总 Token', '未缓存输入', '缓存读取', '输出', '缓存率', '换算金额']);
+  assert.equal(tierMergeCheck.totalMetrics.length, 6, 'Overview strip should render 6 KPI cards including total USD and est. weekly quota USD');
+  assert.ok(/^\$[\d,.]+K?USD$/.test(tierMergeCheck.totalMetrics[4].value), 'Cumulative cost card should show USD: ' + JSON.stringify(tierMergeCheck.totalMetrics[4]));
+  assert.ok(/^≈\$[\d,.]+K?USD$/.test(tierMergeCheck.totalMetrics[5].value), 'Predicted weekly quota card should show ≈ USD from quotaWindows: ' + JSON.stringify(tierMergeCheck.totalMetrics[5]));
+  assert.ok(/^\$[\d,]+\.\d{2,3}$/.test(tierMergeCheck.flashCost), 'Priced model should show USD estimate: ' + tierMergeCheck.flashCost);
+  assert.equal(tierMergeCheck.deepseekCost, '—', 'Unpriced model should show em-dash');
+  assert.ok(tierMergeCheck.legendLabels.includes('Carbon'), 'Carbon high+medium+orchestrator should merge into concise Carbon label');
+  assert.ok(tierMergeCheck.legendLabels.includes('Neon'), 'Neon (High)+(XHigh)+Orchestrator (Neon) should merge into concise Neon label');
+  assert.ok(tierMergeCheck.legendLabels.includes('Hydrogen'), 'Hydrogen xhigh+orchestrator should merge into concise Hydrogen label');
+  assert.ok(tierMergeCheck.legendLabels.includes('Argon'), 'Argon high+medium+orchestrator should merge into concise Argon label');
+  assert.equal(tierMergeCheck.legendLabels.some(l => /orchestrator/i.test(l)), false, 'Orchestrator variants should merge into their corresponding models');
+  assert.equal(tierMergeCheck.hydrogenTip.hidden, false, 'Merged Hydrogen + Orchestrator row should show mode/tier breakdown tooltip');
+  assert.ok(tierMergeCheck.hydrogenTip.title.includes('Gemini 4 Hydrogen'), 'Tooltip should display full model name: ' + tierMergeCheck.hydrogenTip.title);
+  assert.ok(tierMergeCheck.hydrogenTip.tiers.some(t => t.startsWith('Orchestrator')) && tierMergeCheck.hydrogenTip.tiers.some(t => t.startsWith('XHigh')), 'Hydrogen tooltip should include Orchestrator and XHigh: ' + JSON.stringify(tierMergeCheck.hydrogenTip.tiers));
+  assert.ok(tierMergeCheck.legendLabels.includes('GPT-OSS 120B'), 'Hyphenated uppercase model base must be preserved');
+  assert.ok(tierMergeCheck.legendLabels.includes('GPT 5.4') && tierMergeCheck.legendLabels.includes('GPT 5.4 Mini'), 'Mini variant must stay distinct from GPT 5.4');
+  assert.equal(tierMergeCheck.flashTip.hidden, false, 'Multi-tier row hover should show tier breakdown tooltip');
+  assert.ok(tierMergeCheck.flashTip.title.includes('Gemini 3.8 Flash') && tierMergeCheck.flashTip.title.includes('档位分布'), 'Tooltip should show model name and tier heading: ' + tierMergeCheck.flashTip.title);
+  assert.equal(tierMergeCheck.flashTip.tiers.length, 4, 'Gemini 3.8 Flash should list all 4 constituent tiers (High, Medium, Default, Tiered)');
+  assert.ok(tierMergeCheck.flashTip.tiers.some(t => t.startsWith('High')) && tierMergeCheck.flashTip.tiers.some(t => t.startsWith('Medium')) && tierMergeCheck.flashTip.tiers.some(t => t.startsWith('默认')) && tierMergeCheck.flashTip.tiers.some(t => t.startsWith('Tiered')), 'Unexpected tier rows: ' + JSON.stringify(tierMergeCheck.flashTip.tiers));
+  assert.equal(tierMergeCheck.sonnetTip.hidden, false, 'Mixed slug + parenthesized tier should merge into Claude Sonnet 4.6 with 2 tiers');
+  assert.equal(tierMergeCheck.sonnetTip.tiers.length, 2, 'Claude Sonnet 4.6 should show Default + Thinking tiers');
+  assert.equal(tierMergeCheck.hiddenAfterLeave, true, 'Leaving multi-tier row should hide tooltip');
+  assert.equal(tierMergeCheck.singleTierTipHidden, true, 'Single-tier row hover should keep tooltip hidden');
 
   const detailsMetrics = await evalJs(`() => {
     const ud = document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('usage-dashboard');
@@ -489,18 +581,11 @@ test('font sync, scope switching and quota window reference render end-to-end in
     const head = vs.querySelector('.page-head').getBoundingClientRect();
     const body = vs.getElementById('page-body');
     const br = body.getBoundingClientRect();
-    const chart = vs.querySelector('.chart').getBoundingClientRect();
-    const rows = [...vs.querySelectorAll('#table-body tr')];
-    const visibleRows = rows.filter(r => r.getBoundingClientRect().bottom <= br.bottom + 1).length;
+    const chartWrap = vs.querySelector('.chart-wrap').getBoundingClientRect();
+    const iceberg = vs.querySelector('svg.iceberg');
+    const punchRows = vs.querySelectorAll('.punch .u-label.row').length;
     const legendDot = vs.querySelector('#legend .dot').getBoundingClientRect();
     const tableDot = vs.querySelector('#table-body .dot').getBoundingClientRect();
-    const stacks = [...vs.querySelectorAll('.stack')].filter(s => s.querySelector('.bar-segment'));
-    const maxStackH = Math.max(0, ...stacks.map(s => s.getBoundingClientRect().height));
-    const maxStackDiff = Math.max(0, ...stacks.map(s => {
-      const h = s.getBoundingClientRect().height;
-      const sum = [...s.children].reduce((acc, b) => acc + parseFloat(b.style.height), 0);
-      return Math.abs(h - sum);
-    }));
     const pinBefore = {
       localeTop: vs.getElementById('locale').getBoundingClientRect().top,
       refreshTop: vs.getElementById('refresh').getBoundingClientRect().top,
@@ -510,33 +595,31 @@ test('font sync, scope switching and quota window reference render end-to-end in
     };
     return {
       frame: { x: Math.round(dr.x), y: Math.round(dr.y), width: Math.round(dr.width), height: Math.round(dr.height) },
-      chartFrame: { x: Math.round(chart.x), width: Math.round(chart.width) },
+      chartFrame: { x: Math.round(chartWrap.x), width: Math.round(chartWrap.width) },
       headBottom: head.bottom,
       bodyTop: br.top,
       bodyScrollTop: body.scrollTop,
       bodyScrollHeight: body.scrollHeight,
       bodyClientHeight: body.clientHeight,
-      chartVisible: vs.querySelector('.chart').getBoundingClientRect().bottom <= br.bottom + 1,
+      icebergVisible: !!iceberg && iceberg.getBoundingClientRect().bottom <= br.bottom + 1,
       chartWrapNoVScroll: vs.querySelector('.chart-wrap').scrollHeight <= vs.querySelector('.chart-wrap').clientHeight + 1,
-      headVisible: vs.querySelector('#table-head').getBoundingClientRect().bottom <= br.bottom + 1,
-      visibleRows,
+      punchRows,
+      hasStyleToggle: vs.querySelectorAll('[data-chart-style]').length > 0,
+      hasStackedBars: vs.querySelectorAll('.bar-segment').length > 0,
       legendDot: [Math.round(legendDot.width), Math.round(legendDot.height)],
       tableDot: [Math.round(tableDot.width), Math.round(tableDot.height)],
-      maxStackH,
-      maxStackDiff,
       pinBefore,
     };
   }`);
   assert.deepEqual(detailsMetrics.frame, overviewBox, 'overview and details share identical outer frame');
   assert.ok(detailsMetrics.bodyTop >= detailsMetrics.headBottom - 1, 'scrollable page-body starts below pinned header (scrollbar avoids corner)');
-  assert.equal(detailsMetrics.chartVisible, true, 'bar chart should fit cleanly above the fold');
+  assert.equal(detailsMetrics.icebergVisible, true, 'iceberg chart should fit cleanly above the fold');
   assert.equal(detailsMetrics.chartWrapNoVScroll, true, 'chart-wrap must not introduce vertical scrollbar/clipping');
-  assert.equal(detailsMetrics.headVisible, true, 'table header should fit cleanly above the fold');
-  assert.ok(detailsMetrics.visibleRows >= 5, `at least 5 table rows should be visible above the fold at 1280x800, got ${detailsMetrics.visibleRows}`);
+  assert.equal(detailsMetrics.punchRows, expectedMergedStressCount, 'punch card should list all merged models');
+  assert.equal(detailsMetrics.hasStyleToggle, false, 'stacked/mono style toggle should be removed');
+  assert.equal(detailsMetrics.hasStackedBars, false, 'stacked bar segments should be removed');
   assert.deepEqual(detailsMetrics.legendDot, [7, 7]);
   assert.deepEqual(detailsMetrics.tableDot, [7, 7]);
-  assert.ok(detailsMetrics.maxStackH <= 150.5 && detailsMetrics.maxStackH > 10, 'stack height respects 150px plot height: ' + detailsMetrics.maxStackH);
-  assert.ok(detailsMetrics.maxStackDiff < 0.25, 'stack height matches bar segments: ' + detailsMetrics.maxStackDiff);
 
   // Scroll to bottom and verify top-right controls, tabs, scope toggle, and sticky table header stay pinned
   const scrolled = await evalJs(`() => {
@@ -567,7 +650,7 @@ test('font sync, scope switching and quota window reference render end-to-end in
   await evalJs(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('usage-dashboard').firstElementChild.shadowRoot.getElementById('previous').click()`);
   const emptyChartFrame = await evalJs(`() => {
     const vs = document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('usage-dashboard').firstElementChild.shadowRoot;
-    const chart = vs.querySelector('.chart').getBoundingClientRect();
+    const chart = vs.querySelector('.chart-wrap').getBoundingClientRect();
     return {
       rows: vs.querySelectorAll('#table-body tr').length,
       chartFrame: { x: Math.round(chart.x), width: Math.round(chart.width) },
@@ -610,9 +693,116 @@ test('font sync, scope switching and quota window reference render end-to-end in
   await evalJs(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('card-language-zh').click()`);
   await waitUntil(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('week-usage-value').textContent === '129.9M toks (约 216.2M 满额)'`, 'restore zh-CN');
 
+  // Verify stale/discovery errors render sanitized and once in #quota-error (never duplicated in five-note/week-note)
+  staleError = 'Command failed: powershell.exe -NoProfile -NonInteractive -Command Get-CimInstance Win32_Process';
+  await waitUntil(`() => {
+    const sr = document.getElementById('ag-pulse-status-bar').shadowRoot;
+    return !sr.getElementById('quota-error').hidden && sr.getElementById('quota-error').textContent === '统计面板暂时无法连接';
+  }`, 'sanitized raw command error shown once in #quota-error');
+  const errorLayout = await evalJs(`() => {
+    const sr = document.getElementById('ag-pulse-status-bar').shadowRoot;
+    return {
+      quotaError: sr.getElementById('quota-error').textContent,
+      fiveNoteHidden: sr.getElementById('five-note').hidden,
+      fiveNoteText: sr.getElementById('five-note').textContent,
+      weekNoteHidden: sr.getElementById('week-note').hidden,
+      weekNoteText: sr.getElementById('week-note').textContent,
+    };
+  }`);
+  assert.deepEqual(errorLayout, {
+    quotaError: '统计面板暂时无法连接',
+    fiveNoteHidden: true,
+    fiveNoteText: '',
+    weekNoteHidden: true,
+    weekNoteText: '',
+  });
+  staleError = '读取 Antigravity 进程信息超时';
+  await waitUntil(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('quota-error').textContent === '读取 Antigravity 进程信息超时'`, 'discovery timeout message rendered in #quota-error');
+  staleError = null;
+  await waitUntil(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('quota-error').hidden`, 'quota-error hides once recovered');
+
+  // Transient bridge timeout/offline response must keep the widget visible and preserve live metrics as stale
+  transientOffline = true;
+  await waitUntil(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('dot').classList.contains('stale')`, 'transient offline switches dot to stale');
+  const duringTransient = await evalJs(`() => {
+    const bar = document.getElementById('ag-pulse-status-bar');
+    const sr = bar.shadowRoot;
+    return {
+      visibility: getComputedStyle(bar).visibility,
+      inlineVisibility: bar.style.visibility,
+      layout: bar.dataset.layout,
+      density: bar.dataset.density,
+      tps: sr.getElementById('tps').textContent,
+      cacheTotal: sr.getElementById('cache-total').textContent,
+      contextPct: sr.getElementById('context-percent').textContent,
+      quotaErrorHidden: sr.getElementById('quota-error').hidden,
+      quotaErrorText: sr.getElementById('quota-error').textContent,
+    };
+  }`);
+  assert.equal(duringTransient.visibility, 'visible', 'transient timeout must never hide the status bar');
+  assert.equal(duringTransient.inlineVisibility, '');
+  assert.equal(duringTransient.layout, 'ready');
+  assert.equal(duringTransient.density, 'full', 'transient timeout must not collapse hydrated bar to icons-only');
+  assert.notEqual(duringTransient.tps, '—');
+  assert.notEqual(duringTransient.cacheTotal, '— tok');
+  assert.notEqual(duringTransient.contextPct, '—');
+  assert.equal(duringTransient.quotaErrorHidden, true, 'transient reconnect must not display reconnecting warning in quota card');
+  assert.equal(duringTransient.quotaErrorText, '');
+  transientOffline = false;
+  await waitUntil(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('dot').classList.contains('live')`, 'dot recovers to live after transient offline');
+
+  // Unhydrated cold-start transient timeout must show connecting/loading state instead of contextUnknown/noQuota
+  const navigateAndWait = async url => {
+    let loaded;
+    const done = new Promise(resolve => { loaded = resolve; });
+    const prev = cdp.onEvent;
+    cdp.onEvent = msg => { prev?.(msg); if (msg.method === 'Page.loadEventFired') loaded(); };
+    try {
+      await cdp.command('Page.navigate', { url });
+      await Promise.race([done, new Promise((_, reject) => setTimeout(() => reject(new Error('Page load timeout: ' + url)), 15000))]);
+    } finally {
+      cdp.onEvent = prev;
+    }
+  };
+  transientOffline = true;
+  await navigateAndWait(`${baseUrl}/inline-fixture?cold=1`);
+  await waitUntil(`() => {
+    const bar = document.getElementById('ag-pulse-status-bar');
+    const sr = bar?.shadowRoot;
+    return bar?.dataset.layout === 'ready' && sr?.getElementById('dot')?.classList.contains('offline') && sr.getElementById('context-summary')?.textContent === '连接 Antigravity…';
+  }`, 'cold-start transient timeout renders connecting state');
+  const coldTransient = await evalJs(`() => {
+    const sr = document.getElementById('ag-pulse-status-bar').shadowRoot;
+    sr.querySelector('[data-card="context"]').click();
+    return {
+      contextSummary: sr.getElementById('context-summary').textContent,
+      fiveNoteHidden: sr.getElementById('five-note').hidden,
+      fiveNoteText: sr.getElementById('five-note').textContent,
+      weekNoteHidden: sr.getElementById('week-note').hidden,
+      weekNoteText: sr.getElementById('week-note').textContent,
+      quotaErrorHidden: sr.getElementById('quota-error').hidden,
+      quotaErrorText: sr.getElementById('quota-error').textContent,
+    };
+  }`);
+  assert.deepEqual(coldTransient, {
+    contextSummary: '连接 Antigravity…',
+    fiveNoteHidden: false,
+    fiveNoteText: '读取额度…',
+    weekNoteHidden: true,
+    weekNoteText: '',
+    quotaErrorHidden: true,
+    quotaErrorText: '',
+  });
+  transientOffline = false;
+  await evalJs(`() => document.getElementById('ag-pulse-status-bar').shadowRoot.querySelector('.refresh').click()`);
+  await waitUntil(`() => {
+    const sr = document.getElementById('ag-pulse-status-bar').shadowRoot;
+    return sr.getElementById('dot').classList.contains('live') && sr.getElementById('context-percent').textContent !== '—' && sr.getElementById('five-note').hidden;
+  }`, 'cold-start widget hydrates cleanly once sidecar responds');
+
   // 2. Navigate to Sidecar Panel and verify Fira Code font sync + compact quota height + toks cache card
   signedIn = true;
-  await cdp.command('Page.navigate', { url: `${baseUrl}/` });
+  await navigateAndWait(`${baseUrl}/`);
   await waitUntil(`() => document.getElementById('strip-tps')?.textContent && document.getElementById('strip-tps').textContent !== '—'`, 'panel hydrated');
   await evalJs(`() => {
     document.querySelector('.widget').style.height = '580px';
@@ -645,6 +835,7 @@ test('font sync, scope switching and quota window reference render end-to-end in
   assert.equal(panelCheck.fiveVal, '81.1M toks (约 644.2M 满额)');
   assert.equal(panelCheck.weekVal, '129.9M toks (约 216.2M 满额)');
   assert.equal(panelCheck.fits, true, `context-card should fit cleanly inside 580px frame: ${panelCheck.scrollH} vs ${panelCheck.clientH}`);
+  assert.equal(await evalJs(`() => document.getElementById('context-compaction-pill').textContent`), '🗜 2 次');
   assert.equal(panelCheck.stripCacheTotal, '61.8M tok', 'panel top strip retains tok');
   assert.equal(panelCheck.cacheCoverage, '61,795,796');
   assert.equal(panelCheck.cacheCoverageUnit, 'toks');
@@ -697,6 +888,10 @@ test('font sync, scope switching and quota window reference render end-to-end in
   integrationState = { state: 'reconnecting' };
   await evalJs(`() => document.getElementById('refresh-button').click()`);
   await waitUntil(`() => document.getElementById('integration-note').textContent.includes('內嵌狀態列正在自動重新連線')`, 'zh-TW generic reconnecting note');
+
+  integrationState = { state: 'unavailable', reason: 'remote-hub' };
+  await evalJs(`() => document.getElementById('refresh-button').click()`);
+  await waitUntil(`() => document.getElementById('integration-note').textContent.includes('遠端 SSH/WSL 環境')`, 'zh-TW remote-hub note');
 
   integrationState = { state: 'mounted' };
   await evalJs(`() => document.getElementById('refresh-button').click()`);

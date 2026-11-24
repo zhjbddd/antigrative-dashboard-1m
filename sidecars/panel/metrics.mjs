@@ -139,10 +139,9 @@ export function trajectoryMetrics(response, storage = null) {
     const toolOnly = planners.length > 0 && planners.every(step=>step.plannerResponse?.toolCalls?.length > 0 &&
       !String(step.plannerResponse?.response || '').trim());
     const basis = visible !== null || thinking !== null ? 'response' : 'all-output';
-    const rawModel = chat.modelDisplayName || chat.responseModel || String(chat.model || usage.model || '');
     const sample = { responseTokens, duration, ttft, reasons, toolOnly,
       tps: responseTokens !== null && duration > 0 ? responseTokens / duration : null,
-      model: formatModelName(rawModel) || '', basis,
+      model: chat.modelDisplayName || chat.responseModel || String(chat.model || usage.model || ''), basis,
       profile: JSON.stringify([usage.apiProvider || '',chat.responseModel || usage.model || chat.model || chat.modelDisplayName || '',basis]) };
     samples.push(sample);
     ids.set(id,{signature,sample});
@@ -200,7 +199,7 @@ export function trajectoryMetrics(response, storage = null) {
     latestRateStatus: latest?.status ?? 'missing',
     rateBasis: basisSamples.length && basisSamples.every(s => s.basis === 'response') ? 'response' : 'all-output',
     streamingSeconds, modelSeconds, toolSeconds, ttftSeconds: ttftSamples ? ttftSeconds / ttftSamples : null,
-    latestShortSample: latest?.status === 'ok' && latest.duration < 1, model: latest?.model || null,
+    latestShortSample: latest?.status === 'ok' && latest.duration < 1, model: latest?.model ? formatModelName(latest.model) : null,
     context: contextMetrics(lastChat?.chatStartMetadata?.contextWindowMetadata, {
       model:lastChat?.modelDisplayName || lastChat?.responseModel || String(lastChat?.model || ''),
       sampledAt:lastChat?.chatStartMetadata?.createdAt,

@@ -28,7 +28,7 @@ _lock_module = importlib.util.module_from_spec(_lock_spec)
 _lock_spec.loader.exec_module(_lock_module)
 lifecycle_lock, linked = _lock_module.lifecycle_lock, _lock_module.linked
 
-REPO = 'wycocoyu/agy-context-dashboard'
+REPO = 'ATtacK030130/antigrative-dashboard'
 RUNTIME = ('assets', 'compat', 'sidecars', 'plugin.json')
 class RollbackError(RuntimeError):
     pass

@@ -13,11 +13,23 @@ export class TrajectoryReader {
  // Serialized statistics budget, not transcript/response size. Local resource
  // experiments cover 1K/8K/32K records; 8 MiB bounds retained objects well below
  // the 32K-record case (~100 MiB extra heap). See docs/LONG_CONVERSATIONS.md.
- constructor(client,{budgetBytes=8*1024*1024,idleRecheckMs=10000,maxSummaryEntries=4096,maxPages=4096}={}){this.client=client;this.budgetBytes=budgetBytes;this.idleRecheckMs=idleRecheckMs;this.maxSummaryEntries=maxSummaryEntries;this.maxPages=maxPages;}
+ constructor(client,{budgetBytes=8*1024*1024,cacheBudgetBytes=budgetBytes,maxCachedEntries=4,idleRecheckMs=10000,maxSummaryEntries=4096,maxPages=4096}={}){this.client=client;this.budgetBytes=budgetBytes;this.cacheBudgetBytes=cacheBudgetBytes;this.maxCachedEntries=maxCachedEntries;this.idleRecheckMs=idleRecheckMs;this.maxSummaryEntries=maxSummaryEntries;this.maxPages=maxPages;}
  failures=new Map();
  entries=new Map();usagePending=new Map();epoch=0;endpoint=null;summaries=null;summaryAt=-Infinity;summaryPending=null;cachedBytes=0;
  reset(){this.epoch++;this.entries.clear();this.usagePending.clear();this.failures.clear();this.summaries=null;this.summaryAt=-Infinity;this.summaryPending=null;this.cachedBytes=0;}
- trim(keep){for(const [key,e]of this.entries){if(this.cachedBytes<=this.budgetBytes)break;if(key===keep||e.pending)continue;this.cachedBytes-=e.bytes;this.entries.delete(key);}}
+ trim(keep){
+  const limit=Math.min(this.budgetBytes,this.cacheBudgetBytes);
+  const evict=skipRunning=>{
+   for(const [key,e]of this.entries){
+    if(this.cachedBytes<=limit&&this.entries.size<=this.maxCachedEntries)break;
+    if(key===keep||e.pending)continue;
+    if(skipRunning&&e.summary?.status&&!settled(e.summary.status))continue;
+    this.cachedBytes-=e.bytes;this.entries.delete(key);
+   }
+  };
+  evict(true);
+  evict(false);
+ }
  ingestSummaries(all={},keepId=null,endpoint=this.client.server){
   if(endpoint&&(!this.endpoint||['pid','port','csrf'].some(k=>this.endpoint[k]!==endpoint[k]))){
    this.reset();this.endpoint=endpoint;

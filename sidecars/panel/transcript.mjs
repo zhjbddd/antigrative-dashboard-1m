@@ -7,12 +7,16 @@ import {createHash} from 'node:crypto';
 import {StringDecoder} from 'node:string_decoder';
 import {setImmediate as yieldLoop} from 'node:timers/promises';
 import {TrajectoryJson} from './trajectory-json.mjs';
+import {contextMetrics,formatModelName} from './context.mjs';
+import {RATE_VERSION,RATE_REASONS} from './rate-quality.mjs';
 
 const GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SCOPE=/^[0-9a-f]{64}$/;
 const fields=['userTokens','assistantTokens','toolTokens','systemTokens'];
 const count=n=>Number.isSafeInteger(n)&&n>=0;
+const tokenValue=v=>(typeof v==='number'||typeof v==='string'&&/^\d+$/.test(v))&&Number.isSafeInteger(Number(v))&&Number(v)>=0?Number(v):null;
 const projection={step_index:'scalar',type:'scalar',source:'scalar',created_at:'scalar',content:'textEstimate',thinking:'textEstimate'};
+const metricsProjection={step_index:'scalar',type:'scalar',created_at:'scalar',model:'scalar',input_tokens:'scalar',cache_read_tokens:'scalar',cache_write_tokens:'scalar',output_tokens:'scalar'};
 const statuses=['loading','ready','partial','unavailable'];
 const reasons=['reading','missing','unsafe-path','invalid-boundary','row-limit','invalid-record','unmatched-record','incomplete-line','io-error'];
 export function transcriptBrainRoot(host='app'){
@@ -192,4 +196,116 @@ export class TranscriptReader {
    s.eof=s.offset===info.size;
   }finally{await handle.close();}
  }
+ async readMetrics(id,{maxBytes=8*1024*1024}={}){
+  if(!GUID.test(id||''))return null;
+  const normalizedId=id.toLowerCase();
+  const located=await this.locate(normalizedId);
+  if(located.error)return null;
+  const {file,info}=located;
+  const rows=new Map();
+  let limited=false;
+  const handle=await open(file,'r');
+  try{
+   const opened=await handle.stat();
+   if(opened.dev!==info.dev||opened.ino!==info.ino)return null;
+   const buffer=Buffer.alloc(65536),decoder=new StringDecoder('utf8');
+   let offset=0,lineStarted=false,badLine=false,parser=null;
+   const limit=Math.min(info.size,maxBytes);
+   const acceptLine=()=>{
+    if(lineStarted&&!badLine&&parser){
+     try{
+      const record=parser.end();
+      if(count(record?.step_index)&&typeof record.type==='string'&&record.type.length&&record.type.length<=128){
+       if(!rows.has(record.step_index)&&rows.size>=this.maxRows){limited=true;}
+       else rows.set(record.step_index,{
+        index:record.step_index,
+        type:stepType(record.type),
+        createdAt:typeof record.created_at==='string'&&Number.isFinite(Date.parse(record.created_at))?new Date(record.created_at).toISOString():null,
+        model:typeof record.model==='string'?record.model.slice(0,256):null,
+        inputTokens:tokenValue(record.input_tokens),
+        cacheReadTokens:tokenValue(record.cache_read_tokens),
+        cacheWriteTokens:tokenValue(record.cache_write_tokens),
+        outputTokens:tokenValue(record.output_tokens),
+       });
+      }
+     }catch{}
+    }
+    parser=null;lineStarted=false;badLine=false;
+   };
+   while(offset<limit){
+    const {bytesRead}=await handle.read(buffer,0,Math.min(buffer.length,limit-offset),offset);
+    if(!bytesRead)break;
+    offset+=bytesRead;
+    const text=decoder.write(buffer.subarray(0,bytesRead));
+    let start=0;
+    for(let i=0;i<=text.length;i++){
+     if(i!==text.length&&text[i]!=='\n')continue;
+     const part=text.slice(start,i);start=i+1;
+     if(part.trim().length||lineStarted){
+      lineStarted=true;parser??=new TrajectoryJson({projection:metricsProjection,maxRetainedBytes:32768});
+      if(!badLine){try{parser.write(part);}catch{badLine=true;}}
+     }
+     if(i===text.length)break;
+     acceptLine();
+     if(limited)break;
+    }
+    if(limited)break;
+    await yieldLoop();
+   }
+   if(!limited&&offset===info.size){
+    const tail=decoder.end();
+    if(tail){lineStarted=true;parser??=new TrajectoryJson({projection:metricsProjection,maxRetainedBytes:32768});if(!badLine){try{parser.write(tail);}catch{badLine=true;}}}
+    acceptLine();
+   }
+  }finally{await handle.close();}
+  return transcriptMetricsFromRows([...rows.values()].sort((a,b)=>a.index-b.index),normalizedId,{complete:!limited&&info.size<=maxBytes});
+ }
+}
+
+export function transcriptMetricsFromRows(rows,conversationId,{complete=true}={}){
+ if(!Array.isArray(rows)||!rows.length)return null;
+ let rounds=0,requests=0,lastActiveMs=NaN,latestModel=null,latestContext=null;
+ const counts={input:0,output:0,responseOutput:0,thinkingOutput:0,cacheRead:0,cacheWrite:0};
+ const tokens={inputTokens:0,cachedTokens:0,cacheWriteTokens:0,uncachedTokens:0,outputTokens:0,
+  measuredRequests:0,inputRequests:0,outputRequests:0,missingInputRequests:0,missingOutputRequests:0,
+  uncachedRequests:0,cachedRequests:0,cacheWriteRequests:0};
+ const cache={inputTokens:0,cachedTokens:0,cacheWriteTokens:0,uncachedTokens:0,outputTokens:0,measuredRequests:0,missingRequests:0};
+ for(const row of rows){
+  if(row.createdAt){const ms=Date.parse(row.createdAt);if(Number.isFinite(ms)&&(!Number.isFinite(lastActiveMs)||ms>lastActiveMs))lastActiveMs=ms;}
+  if(row.type==='USER_INPUT'){rounds++;continue;}
+  if(row.type!=='PLANNER_RESPONSE')continue;
+  const u=row.inputTokens,r=row.cacheReadTokens??(u!==null?0:null),w=row.cacheWriteTokens??(u!==null?0:null),o=row.outputTokens;
+  if(u===null&&r===null&&w===null&&o===null)continue;
+  requests++;
+  if(row.model)latestModel=formatModelName(row.model)||row.model;
+  counts.input+=u??0;counts.output+=o??0;counts.responseOutput+=o??0;counts.cacheRead+=r??0;counts.cacheWrite+=w??0;
+  if(u!==null){tokens.uncachedTokens+=u;tokens.uncachedRequests++;}
+  if(r!==null){tokens.cachedTokens+=r;tokens.cachedRequests++;}
+  if(w!==null){tokens.cacheWriteTokens+=w;tokens.cacheWriteRequests++;}
+  const promptTokens=u!==null&&r!==null&&w!==null&&count(u+r+w)?u+r+w:null;
+  if(promptTokens!==null){
+   tokens.inputRequests++;
+   cache.inputTokens+=promptTokens;cache.cachedTokens+=r;cache.cacheWriteTokens+=w;cache.uncachedTokens+=u;cache.outputTokens+=o??0;cache.measuredRequests++;
+   const ctx=contextMetrics({estimatedTokensUsed:promptTokens,maxContextTokens:null},{model:row.model,sampledAt:row.createdAt});
+   if(ctx)latestContext={...ctx,source:'Antigravity transcript metadata'};
+  }else{
+   tokens.missingInputRequests++;cache.missingRequests++;
+  }
+  if(o!==null){tokens.outputTokens+=o;tokens.outputRequests++;}else tokens.missingOutputRequests++;
+  tokens.measuredRequests++;
+ }
+ if(!requests&&!latestContext)return null;
+ tokens.inputTokens=tokens.uncachedTokens+tokens.cachedTokens+tokens.cacheWriteTokens;
+ const totalTokens=tokens.inputTokens+tokens.outputTokens;
+ return {
+  source:'Antigravity transcript metadata',status:null,conversationId,
+  steps:rows.length,rounds,requests,measuredRequests:0,missingTiming:requests,excludedTiming:0,rateWarnings:0,
+  timingReasons:Object.fromEntries(RATE_REASONS.map(reason=>[reason,0])),rateVersion:RATE_VERSION,counts,
+  tokens:{...tokens,outputAvailable:tokens.outputRequests>0,totalTokens,
+   complete:complete&&tokens.missingInputRequests===0&&tokens.missingOutputRequests===0},
+  cache:{...cache,totalTokens:cache.inputTokens+cache.outputTokens,hitRate:cache.inputTokens>0?cache.cachedTokens/cache.inputTokens:null,complete:complete&&cache.missingRequests===0},
+  tps:null,latestTps:null,peakTps:null,recentTps:[],lastActiveAt:Number.isFinite(lastActiveMs)?new Date(lastActiveMs).toISOString():null,
+  latestRateStatus:'missing',rateBasis:'all-output',streamingSeconds:0,modelSeconds:0,toolSeconds:0,ttftSeconds:null,
+  latestShortSample:false,model:latestModel,context:latestContext,complete,
+ };
 }

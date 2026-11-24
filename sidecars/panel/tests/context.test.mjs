@@ -63,18 +63,20 @@ test('live lower context updates even when cumulative TPS history is protected',
 test('1M model catalog capacities upgrade lower host soft limits while never inferring compaction', () => {
   assert.equal(modelContextCapacity('gemini-3.8-flash-n'), 1048576);
   assert.equal(modelContextCapacity('Gemini 3.8 Flash (High)'), 1048576);
-  assert.equal(modelContextReference('Claude Sonnet 5.5 (Thinking)').label, '1M');
+  assert.equal(modelContextReference('Claude Sonnet 5.5 (Thinking)').tokens, 1000000);
+  assert.equal(modelContextReference('Claude Opus 5.5 (High)').tokens, 1000000);
   assert.equal(modelContextReference('Claude Sonnet 4.6 (Thinking)').label, '1M');
-  assert.equal(modelContextCapacity('Claude Sonnet 5.5 (Thinking)'), null,'Do not invent an exact number from the inspected 1M label');
+  assert.equal(modelContextCapacity('Claude Sonnet 4.6 (Thinking)'), null,'Do not invent an exact number from the inspected 1M label');
   assert.equal(modelContextCapacity('GPT-OSS 120B (Medium)'), 131072);
   assert.equal(modelContextCapacity('unknown-model'), null);
 
-  for(const model of ['gemini-3.8-flash-n','MODEL_PLACEHOLDER_M318','MODEL_PLACEHOLDER_M667','claude-sonnet-5.5','claude-sonnet-4-6','gpt-oss-120b'])assert.equal(modelCompressionLimit(model),null);
+  for(const model of ['gemini-3.8-flash-n','MODEL_PLACEHOLDER_M318','MODEL_PLACEHOLDER_M532','MODEL_PLACEHOLDER_M537','MODEL_PLACEHOLDER_M667','claude-sonnet-5.5','claude-sonnet-4-6','gpt-oss-120b'])assert.equal(modelCompressionLimit(model),null);
 
   assert.equal(formatModelName('gemini-3.8-flash-n'), 'Gemini 3.8 Flash');
   assert.equal(formatModelName('MODEL_PLACEHOLDER_M318'), 'Gemini 3.8 Flash (High)');
   assert.equal(formatModelName('MODEL_PLACEHOLDER_M319'), 'Gemini 3.8 Flash (Medium)');
   assert.equal(formatModelName('MODEL_PLACEHOLDER_M320'), 'Gemini 3.8 Flash (Low)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M322'), 'Gemini 3.8 Flash (Tiered)');
   assert.equal(formatModelName('MODEL_PLACEHOLDER_M317'), 'MODEL_PLACEHOLDER_M317');
 
   const result = contextMetrics(
@@ -92,6 +94,39 @@ test('1M model catalog capacities upgrade lower host soft limits while never inf
   assert.equal(result.compressionFraction,null);
   assert.equal(result.model, 'Gemini 3.8 Flash');
 });
+test('Antigravity 2.35.0 Neon, Orchestrator (Neon), and Claude 5.5 models resolve and upgrade cleanly',()=>{
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M532'),'Gemini 4 Neon (High)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M533'),'Gemini 4 Neon (Medium)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M534'),'Gemini 4 Neon (Low)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M535'),'Gemini 4 Neon (XHigh)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M537'),'Orchestrator (Neon)');
+  assert.equal(formatModelName('gemini-pro-orchestrator-neon'),'Orchestrator (Neon)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M578'),'Gemini 4 Hydrogen (Sonar)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M400'),'Claude Opus 5.5 (Low)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M401'),'Claude Opus 5.5 (Medium)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M402'),'Claude Opus 5.5 (High)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M403'),'Claude Sonnet 5.5 (Low)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M404'),'Claude Sonnet 5.5 (Medium)');
+  assert.equal(formatModelName('MODEL_PLACEHOLDER_M405'),'Claude Sonnet 5.5 (High)');
+
+  assert.equal(modelContextCapacity('MODEL_PLACEHOLDER_M532'),1048576);
+  assert.equal(modelContextCapacity('gemini-4-neon-xhigh'),1048576);
+  assert.equal(modelContextCapacity('MODEL_PLACEHOLDER_M537'),1048576);
+  assert.equal(modelContextCapacity('MODEL_PLACEHOLDER_M578'),1048576);
+  assert.equal(modelContextCapacity('MODEL_PLACEHOLDER_M402'),1000000);
+  assert.equal(modelContextCapacity('MODEL_PLACEHOLDER_M405'),1000000);
+
+  const neon=contextMetrics({estimatedTokensUsed:120000,maxContextTokens:512000},{model:'MODEL_PLACEHOLDER_M532'});
+  assert.equal(neon.model,'Gemini 4 Neon (High)');
+  assert.equal(neon.maxTokens,1048576);
+  assert.equal(neon.hostMaxTokens,512000);
+  assert.equal(neon.capacitySource,'model-catalog');
+
+  const claude55=contextMetrics({estimatedTokensUsed:200000,maxContextTokens:200000},{model:'MODEL_PLACEHOLDER_M402'});
+  assert.equal(claude55.model,'Claude Opus 5.5 (High)');
+  assert.equal(claude55.maxTokens,1000000);
+  assert.equal(claude55.capacitySource,'model-catalog');
+});
 test('lower host soft limits upgrade to 1M on known Gemini/Orchestrator models while keeping hostMaxTokens',()=>{
  const result=contextMetrics({estimatedTokensUsed:80000,maxContextTokens:100000},{model:'Gemini 3.8 Flash (High)'});
  assert.equal(result.maxTokens,1048576);assert.equal(result.hostMaxTokens,100000);
@@ -102,7 +137,7 @@ test('equivalent model IDs normalize identically without changing versions or in
  for(const family of ['sonnet','opus'])for(const version of ['4.6','5.5']){
   const dot=`claude-${family}-${version}`,dash=dot.replace('.', '-');
   assert.equal(formatModelName(dot),formatModelName(dash));assert.deepEqual(modelContextReference(dot),modelContextReference(dash));
-  assert.equal(modelContextReference(dot).label,'1M');assert.ok(!formatModelName(dot).includes('Thinking'));
+  assert.ok(!formatModelName(dot).includes('Thinking'));
   assert.match(formatModelName(`Claude ${family} ${version} (Thinking)`),/\(Thinking\)$/);
  }
  assert.equal(formatModelName('MODEL_PLACEHOLDER_M35'),'Claude Sonnet 4.6 (Thinking)');
@@ -211,7 +246,7 @@ test('metrics and history normalize raw placeholder and wrapped model names',asy
  assert.equal((await history.load(scope,id)).metrics.model,'Claude Sonnet 5.5 (Medium)');
 });
 test('unknown/family/specialized model names never inherit another model reference',()=>{
- for(const model of ['Gemini','gemini-3.8-flash-tts','gemini-3.8-flash-lite','gemini-4','gemini-4-hydrogen-tts','Claude','claude-sonnet-4','claude-sonnet-5-5-custom','gpt-oss','gpt-oss-20b','gpt-6.1','gpt-6.1-sol-custom','MODEL_PLACEHOLDER_M317','MODEL_PLACEHOLDER_M322','word/MODEL_PLACEHOLDER_M322','MODEL_PLACEHOLDER_M421','user-gemini-3.8-flash-custom']){
+ for(const model of ['Gemini','gemini-3.8-flash-tts','gemini-3.8-flash-lite','gemini-4','gemini-4-hydrogen-tts','Claude','claude-sonnet-4','claude-sonnet-5-5-custom','gpt-oss','gpt-oss-20b','gpt-6.1','gpt-6.1-sol-custom','MODEL_PLACEHOLDER_M317','MODEL_PLACEHOLDER_M421','user-gemini-3.8-flash-custom']){
   assert.equal(modelContextReference(model),null,model);assert.equal(formatModelName(model),model);
  }
  for(const model of [undefined,null,123,'',' \n\t'])assert.equal(modelContextReference(model),null);

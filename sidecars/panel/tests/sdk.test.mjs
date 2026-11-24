@@ -86,7 +86,7 @@ test('failed regeneration cannot replace an earlier validated SDK generation',as
  await assert.rejects(loadBundledSdk(options),/监听地址/);assert.deepEqual(await readdir(cache),[generation]);assert.equal(await readFile(join(cache,generation,'index.mjs'),'utf8'),saved);
 });
 
-test('extractBundledSdkFromFile handles >4 MiB binaries straddling chunk boundaries and sidecar.json caps V8 heap',async t=>{
+test('extractBundledSdkFromFile handles >4 MiB binaries straddling chunk boundaries and sidecar.json avoids hard heap crash caps',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'ag-sdk-chunked-'));t.after(()=>rm(directory,{recursive:true,force:true}));
  const source=fixture();
  const markerOffsetInSdk=source.indexOf('export class SidecarApp');
@@ -103,5 +103,5 @@ test('extractBundledSdkFromFile handles >4 MiB binaries straddling chunk boundar
  const loaded=await loadBundledSdk({executable:exe,directory:join(directory,'cache')});
  assert.equal(typeof loaded.SidecarApp,'function');
  const sidecarConfig=JSON.parse(await readFile(new URL('../sidecar.json',import.meta.url),'utf8'));
- assert.deepEqual(sidecarConfig.args,['--max-old-space-size=512','main.mjs']);
+ assert.deepEqual(sidecarConfig.args,['main.mjs']);
 });

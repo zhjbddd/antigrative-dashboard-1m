@@ -143,4 +143,32 @@ test('saved numeric estimates survive restart; zero-step undo replaces them even
  const after=(await history.load(scope,id)).metrics;assert.equal(after.transcriptStats.totalTokens,0);assert.equal(after.tokens.outputTokens,100);
  const record=await (await import('node:fs/promises')).readFile(history.file(scope,id),'utf8');assert.equal(record.includes('content'),false);
 });
+test('readMetrics extracts exact 2.34.0 transcript token counts without retaining content and serves as 403 fallback',async t=>{
+ const {reader,file}=await fixture(t);
+ const rows=[
+  row(0,'USER_INPUT','PRIVATE_USER_PROMPT'),
+  row(1,'PLANNER_RESPONSE','PRIVATE_REPLY',{model:'gemini-4-neon-high',input_tokens:16000,cache_read_tokens:0,output_tokens:500,thinking:'PRIVATE_THOUGHT'}),
+  row(2,'GENERIC','PRIVATE_TOOL_OUTPUT'),
+  row(3,'PLANNER_RESPONSE','PRIVATE_REPLY_2',{model:'gemini-4-neon-high',input_tokens:4000,cache_read_tokens:16000,output_tokens:600}),
+ ];
+ await writeFile(file,jsonl(rows));
+ const metrics=await reader.readMetrics(id);
+ assert.equal(metrics.source,'Antigravity transcript metadata');
+ assert.equal(metrics.rounds,1);assert.equal(metrics.steps,4);assert.equal(metrics.requests,2);
+ assert.equal(metrics.context.usedTokens,20000);assert.equal(metrics.context.maxTokens,null);
+ assert.equal(metrics.context.model,'Gemini 4 Neon (High)');
+ assert.equal(metrics.tokens.uncachedTokens,20000);assert.equal(metrics.tokens.cachedTokens,16000);
+ assert.equal(metrics.tokens.outputTokens,1100);assert.equal(metrics.tokens.totalTokens,37100);
+ assert.equal(metrics.cache.hitRate,16000/36000);
+ assert.equal(metrics.tps,null);
+ assert.equal(JSON.stringify(metrics).includes('PRIVATE'),false);
+
+ const restricted=Object.assign(new Error('Antigravity 接口 GetCascadeTrajectory 返回 403'),{status:403,restricted:true,code:'RPC_RESTRICTED'});
+ const store=new MetricsStore({trajectory:async()=>{throw restricted;}},{history:{load:async()=>null,save:async()=>null},transcripts:reader});
+ store.identity=scope;
+ const fallback=await store.session(id,true);
+ assert.equal(fallback.context.usedTokens,20000);
+ assert.equal(fallback.cache.hitRate,16000/36000);
+ assert.equal(fallback.conversationId,id);
+});
 function emptyStats(){return safeTranscriptStats({status:'ready',complete:true,userTokens:0,assistantTokens:0,toolTokens:0,systemTokens:0,matchedSteps:0,compactionMarkers:0,imageSteps:0});}

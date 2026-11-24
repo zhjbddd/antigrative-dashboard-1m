@@ -2,7 +2,7 @@ import {BackgroundStatistics} from './background-statistics.mjs';
 import {dirname,join} from 'node:path';
 import {collectionFailure} from './collection-state.mjs';
 import { createHash } from 'node:crypto';
-import { AntigravityClient } from './client.mjs';
+import { AntigravityClient, isRestrictedRpcError } from './client.mjs';
 import { registerCatalogModels } from './context.mjs';
 import { quotaMetrics, trajectoryMetrics } from './metrics.mjs';
 import { SessionHistory, usableMetrics, reconcileMetrics, safeMetrics } from './history.mjs';
@@ -16,8 +16,8 @@ const LOCAL_SCOPE = createHash('sha256').update('ag-pulse:local-unauthenticated'
 const BACKGROUND_RECHECK_MS=5*60*1000, BACKGROUND_MANUAL_COOLDOWN_MS=10*1000;
 const settledStatus=s=>/IDLE|DONE|COMPLETED|CANCELLED|CANCELED|STOPPED|FAILED|ERROR/.test(String(s||''));
 export class MetricsStore {
-  constructor(client = new AntigravityClient(), { history = new SessionHistory(), onTrajectory = null, onBackgroundResult = null, background = undefined, transcripts = new TranscriptReader(), owns=()=>true } = {}) {
-    this.client = client; this.history = history; this.onTrajectory=onTrajectory; this.onBackgroundResult=onBackgroundResult; this.transcripts=transcripts; this.owns=owns;
+  constructor(client = new AntigravityClient(), { history = new SessionHistory(), onTrajectory = null, onBackgroundResult = null, background = undefined, transcripts = new TranscriptReader(), owns=()=>true, maxCachedSessions=32 } = {}) {
+    this.client = client; this.history = history; this.onTrajectory=onTrajectory; this.onBackgroundResult=onBackgroundResult; this.transcripts=transcripts; this.owns=owns; this.maxCachedSessions=maxCachedSessions;
     this.background=background===undefined?(typeof client.streamTrajectoryPage==='function'&&history.directory?new BackgroundStatistics({directory:join(dirname(history.directory),'collection-jobs'),owns:()=>this.owned(),onComplete:(...args)=>this.acceptBackground(...args)}):null):background;
     if(this.background&&client.reader)client.reader.isBackgroundManaged=id=>this.sessions.get(id)?.backgroundOnly===true;
     this.delegated=new DelegatedUsage(client,{owns,
@@ -57,16 +57,32 @@ export class MetricsStore {
   usageFailureVersion(source){return this.usagePersistenceFailureVersions.get(source)||0;}
   clearUsagePersistenceErrors(){this.usagePersistenceFailures.clear();this.usagePersistenceFailureVersions.clear();this.usagePersistenceError=false;}
 
+  trimSessions(keepId=null){
+    if(!(this.maxCachedSessions>0)||this.sessions.size<=this.maxCachedSessions)return;
+    for(const [key,entry]of this.sessions){
+      if(this.sessions.size<=this.maxCachedSessions)break;
+      if(key===keepId||entry?.pending)continue;
+      if(entry?.backgroundOnly&&!entry.backgroundReady)continue;
+      if(this.background?.state?.(key)?.state==='processing')continue;
+      this.sessions.delete(key);
+    }
+  }
+  touchSession(id,entry){
+    this.sessions.delete(id);
+    this.sessions.set(id,entry);
+    this.trimSessions(id);
+  }
+
   async cachedSession(id) {
     if (!this.owned() || !GUID.test(id)) return null;
     id=id.toLowerCase();
     const identity = this.identity, scope = this.storageScope(identity), epoch = this.epoch;
     const entry = this.sessions.get(id);
-    if (usableMetrics(entry?.data)) return { ...entry.data, transcriptRestoredFromHistory:!!entry.data.transcriptStats, restoredFromHistory: true, savedAt: entry.savedAt || null };
+    if (usableMetrics(entry?.data)) { this.touchSession(id,entry); return { ...entry.data, transcriptRestoredFromHistory:!!entry.data.transcriptStats, restoredFromHistory: true, savedAt: entry.savedAt || null }; }
     const saved = await this.history.load(scope,id);
     if (!this.owned() || identity !== this.identity || epoch !== this.epoch) return null;
     if (!saved) return null;
-    if (!this.sessions.has(id)) this.sessions.set(id,{data:saved.metrics,savedAt:saved.savedAt,updatedAt:0});
+    if (!this.sessions.has(id)) this.touchSession(id,{data:saved.metrics,savedAt:saved.savedAt,updatedAt:0});
     return {...saved.metrics,transcriptRestoredFromHistory:!!saved.metrics.transcriptStats,restoredFromHistory:true,savedAt:saved.savedAt};
   }
 
@@ -143,9 +159,9 @@ export class MetricsStore {
     const identity = this.identity, scope = this.storageScope(identity), epoch = this.epoch;
     let entry = this.sessions.get(id);
     if (entry?.pending) return entry.pending;
-    if (!force && entry?.data && Date.now() - entry.updatedAt < 1800) return entry.data;
+    if (!force && entry?.data && Date.now() - entry.updatedAt < 1800) { this.touchSession(id,entry); return entry.data; }
     entry ||= {};
-    this.sessions.set(id, entry);
+    this.touchSession(id, entry);
     const current = () => this.owned() && identity === this.identity && epoch === this.epoch && this.sessions.get(id) === entry;
     entry.pending = (async () => {
       if (!entry.data) {
@@ -185,12 +201,21 @@ export class MetricsStore {
       catch { if(current())this.persistenceError = '统计暂时无法保存到本地'; }
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
       return entry.data;
-    })().catch(error => {
+    })().catch(async error => {
       if(current()){
         entry.collection=collectionFailure(error);
         if(entry.collection&&entry.collection.kind!=='field')this.startBackground(scope,id,entry,current);
       }
       if (current() && usableMetrics(entry.data)) { entry.updatedAt = Date.now(); entry.data = {...entry.data,transcriptRestoredFromHistory:!!entry.data.transcriptStats,restoredFromHistory:true,savedAt:entry.savedAt || null}; return entry.data; }
+      if (current() && isRestrictedRpcError(error) && typeof this.transcripts?.readMetrics === 'function') {
+        try {
+          const fallback = await this.transcripts.readMetrics(id);
+          if (current() && usableMetrics(fallback)) {
+            entry.updatedAt = Date.now();
+            return { ...fallback, conversationId: id };
+          }
+        } catch {}
+      }
       throw error;
     }).finally(() => { entry.pending = null; });
     return entry.pending;
@@ -239,5 +264,5 @@ export class MetricsStore {
       source: 'Antigravity local API',
     };
   }
-  dispose(){this.disposed=true;this.background?.dispose();this.delegated.dispose();this.transcripts?.reset();this.epoch++;}
+  dispose(){this.disposed=true;this.background?.dispose();this.delegated.dispose();this.transcripts?.reset();this.sessions.clear();this.epoch++;}
 }

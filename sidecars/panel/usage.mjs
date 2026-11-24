@@ -1,26 +1,27 @@
 import {Worker} from 'node:worker_threads';
 // Local usage ledger. Never stores prompts, credentials or raw request IDs.
 import {readFile,writeFile,mkdir,rename,readdir,unlink,open,stat,lstat} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join,basename} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {usageModelKey} from './context.mjs';
+import {createRequire} from 'node:module';
 import {tokenCount,requestCacheMetrics} from './metrics.mjs';
 import {platformPaths} from '../../compat/platform.mjs';
 import {discoverLocalConversations,conversationId} from './local-conversations.mjs';
 import {setImmediate as yieldToLiveRequests} from 'node:timers/promises';
 import {delegatedIds} from './delegation.mjs';
 import {collectionFailure} from './collection-state.mjs';
+import {syncAndSummarizeIndex,findForeignRequestIds} from './usage-index.mjs';
+import {QuotaEstimator} from './quota-estimator.mjs';
+const pricing=createRequire(import.meta.url)('../../compat/pricing.cjs')();
 const HASH=/^[a-f0-9]{64}$/,GUID=/^[a-f0-9-]{36}$/i;
 const hash=value=>createHash('sha256').update(value).digest('hex');
 export const LOCAL_SCOPE=hash('ag-pulse:local-unauthenticated');
 const keys=['uncached','cacheRead','cacheWrite','output'];
 export function quotaModelFamily(value){
-  const raw=String(value||'');
-  const resolved=raw?usageModelKey(raw):'';
-  const s=raw+' '+resolved;
+  const s=String(value||'');
   if(/(?:^|[^a-z])argon(?:$|[^a-z])/i.test(s))return 'gemini-argon';
-  if(/gemini|hydrogen|carbon|orchestrator/i.test(s))return 'gemini';
-  if(/claude|sonnet|opus|haiku|anthropic|gpt|openai|perplexity|fable/i.test(s)||/(?:^|[^a-z0-9])o[134](?:$|[^a-z0-9])/i.test(s)||/^3p(?:$|[-_])/i.test(raw.trim()))return '3p';
+  if(/gemini|hydrogen|carbon|neon|orchestrator/i.test(s))return 'gemini';
+  if(/claude|sonnet|opus|haiku|anthropic|gpt|openai/i.test(s)||/(?:^|[^a-z0-9])o[134](?:$|[^a-z0-9])/i.test(s)||/^3p(?:$|[-_])/i.test(s))return '3p';
   return null;
 }
 export function classifyQuotaGroupId(groups,model){
@@ -44,33 +45,43 @@ function buildQuotaWindowSpecs(groups){
       if(!Number.isFinite(endAt))continue;
       const dur=win==='5h'?18000000:604800000;
       const remaining=typeof b.remaining==='number'&&Number.isFinite(b.remaining)&&b.remaining>=0&&b.remaining<=1?b.remaining:null;
-      specs.push({id:`${g.id}:${win}`,groupId:g.id,window:win,startAt:endAt-dur,endAt,resetMinute:Math.round(endAt/60000),remaining});
+      const idle=remaining!==null&&remaining>=1;
+      specs.push({id:`${g.id}:${win}`,groupId:g.id,window:win,startAt:endAt-dur,endAt,resetMinute:Math.round(endAt/60000),remaining,idle});
     }
   }
   return {specs,groupInfos};
 }
-function finalizeQuotaWindows(specs,counts={}){
+function quotaWindowMeta(specs){
+  return Object.fromEntries(specs.map(s=>[s.id,{resetMinute:s.resetMinute,idle:s.idle}]));
+}
+function finalizeQuotaWindows(specs,counts={},meta=null,{estimator=null,accountKey=null,allowUpdate=true,days=null,today=''}={}){
   const out={};
+  const hasDedicatedArgon=specs.some(s=>s.window==='weekly'&&pricing.quotaFamily(s.groupId)==='gemini-argon');
+  const rateFor=Array.isArray(days)&&days.length&&today?pricing.computeFamilyRates(days,today,{hasDedicatedArgon}):null;
   for(const spec of specs){
+    const prev=meta?.[spec.id];
+    if(prev){
+      if(spec.idle!==prev.idle)continue;
+      if(!spec.idle&&Math.abs(prev.resetMinute-spec.resetMinute)>2)continue;
+    }
     const c=counts[spec.id];
     if(!c||!c.requests)continue;
-    const usedFraction=typeof spec.remaining==='number'?Math.max(0,Math.min(1,1-spec.remaining)):null;
-    const estimatedFullTokens=c.observedTokens>0&&usedFraction!==null&&usedFraction>=0.05?Math.round(c.observedTokens/usedFraction):null;
-    out[spec.id]={observedTokens:c.observedTokens,estimatedFullTokens,requests:c.requests,usedFraction};
+    if(estimator){
+      // Weekly windows convert cost-space full USD to tokens via recent 7-day family rate
+      // (matching Overview KPI tooltips); 5h windows use the window's own blended rate first.
+      const windowRate=typeof c.observedCostUsd==='number'&&c.observedCostUsd>0&&c.observedTokens>0?c.observedCostUsd/c.observedTokens:null;
+      const familyRate=rateFor?rateFor(pricing.quotaFamily(spec.groupId)):null;
+      const recentUsdPerToken=spec.window==='weekly'?(familyRate||windowRate):(windowRate||familyRate);
+      out[spec.id]=estimator.estimate(accountKey,spec,c,{allowUpdate,recentUsdPerToken});
+    }else{
+      const usedFraction=typeof spec.remaining==='number'?Math.max(0,Math.min(1,1-spec.remaining)):null;
+      const estimatedFullTokens=c.observedTokens>0&&usedFraction!==null&&usedFraction>=0.05?Math.round(c.observedTokens/usedFraction):null;
+      out[spec.id]={observedTokens:c.observedTokens,estimatedFullTokens,requests:c.requests,usedFraction};
+    }
   }
   return out;
 }
-const cleanModel=value=>usageModelKey(typeof value==='string'?value:value==null?'':String(value));
-export function createUsageModelNormalizer(){
-  const cache=new Map();
-  return value=>{
-    const key=typeof value==='string'?value:'';
-    if(cache.has(key))return cache.get(key);
-    const normalized=usageModelKey(key);
-    if(cache.size<512)cache.set(key,normalized);
-    return normalized;
-  };
-}
+const cleanModel=value=>String(value||'Unknown').replace(/[\x00-\x1f\x7f]/g,'').slice(0,120);
 const stamp=value=>typeof value==='string'&&/^20\d\d-\d\d-\d\dT/.test(value)&&Number.isFinite(Date.parse(value))?Date.parse(value):null;
 const sum=r=>keys.reduce((n,k)=>n+(r[k]??0),0);
 function mergeUsageRow(row,old){const record={...row,at:row.at??old?.at??null,timeBasis:row.at===null&&old?.at!==null&&old?.at!==undefined?old.timeBasis:row.timeBasis};for(const key of keys)record[key]=row[key]??old?.[key]??null;return record;}
@@ -147,8 +158,9 @@ export function usageRecords(raw,conversationId,{maxRows=Infinity,maxBytes=Infin
 const validRow=r=>r&&HASH.test(r.id)&&typeof r.model==='string'&&r.model.length<=120&&
   (r.at===null||Number.isSafeInteger(r.at)&&r.at>=0)&&keys.every(k=>r[k]===null||Number.isSafeInteger(r[k])&&r[k]>=0);
 export class UsageLedger{
-  constructor(directory=join(platformPaths().data,'usage-v1'),{timeZone='Asia/Shanghai',source='desktop-local'}={}){this.directory=directory;this.timeZone=timeZone;this.source=source;}
-  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();jsonSummaryPending=new Map();
+  constructor(directory=join(platformPaths().data,'usage-v1'),{timeZone='Asia/Shanghai',source='desktop-local'}={}){this.directory=directory;this.timeZone=timeZone;this.source=source;this.quotaEstimator=new QuotaEstimator(directory);}
+  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();jsonSummaryPending=new Map();_dirtySources=new Set();_indexQueue=Promise.resolve();
+  markSourceDirty(scope,filePath){if(scope&&filePath)this._dirtySources.add(`${scope}/${basename(filePath)}`);}
   get cache(){return this._cache;}
   set cache(value){this._cache=value;if(!value)this.caches.clear();else if(value.key)this.caches.set(value.key,value);}
   get diskSummaryRetry(){return this._diskSummaryRetry;}
@@ -235,6 +247,7 @@ export class UsageLedger{
       finally{await unlink(temp).catch(()=>{});}
       // Keep the last same-account/day result as a visibly stale fallback
       // while a potentially expensive disk-backed summary is rebuilt.
+      this.markSourceDirty(scope,file);
       this.revision++;
     }).catch(error=>{if(isCurrent()===true)throw error;}).finally(()=>this.endUsageWrite(scope));
   }
@@ -274,7 +287,7 @@ export class UsageLedger{
       const staging=file+'.'+randomUUID()+'.tmp';
       try{
         const result=await this.diskJob({action:'merge',scope,previous,staging,...input},{isCurrent});if(!result||isCurrent()!==true)return;
-        if(result.changed!==false){await rename(staging,file);this.revision++;}
+        if(result.changed!==false){await rename(staging,file);this.markSourceDirty(scope,file);this.revision++;}
         this.diskSignatures??=new Map();this.diskSignatures.delete(file);
         if(signature){const info=await lstat(file);if(!info.isSymbolicLink()&&info.isFile())this.diskSignatures.set(file,{signature,size:info.size,mtimeMs:info.mtimeMs,ctimeMs:info.ctimeMs,ino:info.ino});}
         while(this.diskSignatures.size>128)this.diskSignatures.delete(this.diskSignatures.keys().next().value);
@@ -288,23 +301,46 @@ export class UsageLedger{
     // diskQueue independently limits expensive workers to one at a time.
     return this.enqueue(file,()=>this.mergeDisk(scope,id,input,options)).finally(()=>{this.diskWrites--;this.endUsageWrite(scope);});
   }
+  storeSummaryCache(cacheKey,entry){
+    const tag=entry?.tag;
+    if(tag){
+      for(const [k,existing]of this.caches){
+        if(k!==cacheKey&&existing?.tag===tag)this.caches.delete(k);
+      }
+    }
+    this._cache=entry;
+    this.caches.set(cacheKey,entry);
+  }
+  findFallbackSummaryCache(tag){
+    let best=null;
+    for(const entry of this.caches.values()){
+      if(entry?.tag!==tag)continue;
+      if(!best||(entry.revision>best.revision)||(entry.revision===best.revision&&(entry.at||0)>(best.at||0)))best=entry;
+    }
+    return best;
+  }
   startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent,options={}){
     const retry=this.diskSummaryRetries.get(cacheKey);
     if(this.diskSummaryPending||retry&&retry.at>Date.now())return;
     const staging=scope==='all'?join(this.directory,'.summary-all-'+randomUUID()+'.tmp'):join(this.directory,scope,'.summary-'+randomUUID()+'.tmp');
-    this.diskSummaryPending=this.diskJob({action:'summary',scope,directory:scope==='all'?this.directory:join(this.directory,scope),buckets:options.buckets||null,quotaAccount:options.quotaAccount||null,quotaGroups:options.groupInfos||null,quotaWindowSpecs:options.specs||null,localScope:LOCAL_SCOPE,staging,now,timeZone:this.timeZone,source:this.source},{isCurrent}).then(raw=>{
-      if(!raw||isCurrent()!==true)return;this.diskSummaryError=false;
+    const dirtyFiles=options.dirtyFiles?.length?options.dirtyFiles:null;
+    const revisionRetryMs=Number.isFinite(options.revisionRetryMs)&&options.revisionRetryMs>=0?options.revisionRetryMs:30000;
+    this.diskSummaryPending=this.diskJob({action:'summary',scope,rootDirectory:this.directory,directory:scope==='all'?this.directory:join(this.directory,scope),buckets:options.buckets||null,quotaAccount:options.quotaAccount||null,quotaGroups:options.groupInfos||null,quotaWindowSpecs:options.specs||null,dirtyFiles,localScope:LOCAL_SCOPE,staging,now,timeZone:this.timeZone,source:this.source},{isCurrent}).then(raw=>{
+      if(!raw||isCurrent()!==true)return null;this.diskSummaryError=false;
+      if(dirtyFiles&&this.revision===scanRevision){for(const k of dirtyFiles)this._dirtySources.delete(k);}
       const {quotaWindowCounts,...value}=raw;
       if(quotaWindowCounts)Object.defineProperty(value,'_quotaWindowCounts',{value:quotaWindowCounts,enumerable:false,configurable:true});
-      const entry={key:cacheKey,revision:scanRevision,at:now,value};
-      if(this.revision===scanRevision){this._cache=entry;this.caches.set(cacheKey,entry);this._diskSummaryRetry=null;this.diskSummaryRetries.delete(cacheKey);}
+      if(options.specs?.length)Object.defineProperty(value,'_quotaWindowMeta',{value:quotaWindowMeta(options.specs),enumerable:false,configurable:true});
+      const entry={key:cacheKey,tag:options.cacheTag||null,revision:scanRevision,at:now,value};
+      if(this.revision===scanRevision){this.storeSummaryCache(cacheKey,entry);this._diskSummaryRetry=null;this.diskSummaryRetries.delete(cacheKey);}
       else {
         const existing=this.caches.get(cacheKey);
-        if(!existing||existing.revision<=scanRevision){this._cache=entry;this.caches.set(cacheKey,entry);}
-        const retryEntry={key:cacheKey,at:Date.now()+30000};
+        if(!existing||existing.revision<=scanRevision){this.storeSummaryCache(cacheKey,entry);}
+        const retryEntry={key:cacheKey,at:Date.now()+revisionRetryMs};
         this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);
       }
-    }).catch(()=>{if(isCurrent()===true){this.diskSummaryError=true;const retryEntry={key:cacheKey,at:Date.now()+30000};this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);}}).finally(async()=>{for(const suffix of ['', '-journal'])await unlink(staging+suffix).catch(()=>{});this.diskSummaryPending=null;});
+      return value;
+    }).catch(()=>{if(isCurrent()===true){this.diskSummaryError=true;const retryEntry={key:cacheKey,at:Date.now()+30000};this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);}return null;}).finally(async()=>{for(const suffix of ['', '-journal'])await unlink(staging+suffix).catch(()=>{});this.diskSummaryPending=null;});
   }
   async listAccountBuckets(){
     let names=[];try{names=await readdir(this.directory);}catch(e){if(e.code==='ENOENT')return [];throw e;}
@@ -323,23 +359,54 @@ export class UsageLedger{
     }
     return count;
   }
-  async summary(scope,now=Date.now(),{isCurrent=()=>true,groups=null,quotaAccount=null,preferCachedMaxAgeMs=0}={}){
+  async filterForeignOwnedRows(scope,rows,{isCurrent=()=>true}={}){
+    if(!scope||scope===LOCAL_SCOPE||!Array.isArray(rows)||!rows.length)return rows||[];
+    let names=[];
+    try{names=await readdir(this.directory);}catch(e){if(e.code==='ENOENT')return rows;throw e;}
+    if(isCurrent()!==true)return [];
+    if(!names.some(n=>HASH.test(n)&&n!==scope&&n!==LOCAL_SCOPE))return rows;
+    if(this.diskSummaryPending){
+      await this.diskSummaryPending.catch(()=>{});
+      if(isCurrent()!==true)return [];
+    }
+    const dirtySnapshot=this._dirtySources.size?new Set(this._dirtySources):null;
+    const run=()=>findForeignRequestIds({
+      directory:this.directory,
+      scope,
+      localScope:LOCAL_SCOPE,
+      requestIds:rows.map(r=>r.id),
+      timeZone:this.timeZone,
+      readRecord:file=>this.readSummaryRecord(file),
+      dirtyFiles:dirtySnapshot,
+      yieldEveryMs:8,
+      busyTimeoutMs:250,
+    });
+    const next=this._indexQueue.catch(()=>{}).then(run);
+    this._indexQueue=next.catch(()=>{});
+    const foreign=await next;
+    if(isCurrent()!==true)return [];
+    return foreign.size?rows.filter(r=>!foreign.has(r.id)):rows;
+  }
+  async summary(scope,now=Date.now(),{isCurrent=()=>true,groups=null,quotaAccount=null,preferCachedMaxAgeMs=0,maxWaitMs=0}={}){
     const allBuckets=scope==='all';
     if(!scope||(!allBuckets&&!HASH.test(scope)))return null;
     const {specs,groupInfos}=quotaAccount&&Array.isArray(groups)&&groups.length?buildQuotaWindowSpecs(groups):{specs:[],groupInfos:[]};
-    const winSig=specs.length?'|'+quotaAccount+'|'+specs.map(s=>`${s.id}@${s.resetMinute}`).join(','):'';
+    if(specs.length&&this.quotaEstimator&&!this.quotaEstimator.loaded)await this.quotaEstimator.load();
+    const winSig=specs.length?'|'+quotaAccount+'|'+specs.map(s=>`${s.id}@${s.idle?'idle':s.resetMinute}`).join(','):'';
     const today=dateKey(now,this.timeZone),cacheKey=scope+':'+today+winSig;
-    const finalize=rawValue=>{
+    const cacheTag=scope+':'+today+'|'+(quotaAccount||'');
+    const finalize=(rawValue,checkMeta=false,allowUpdate=true)=>{
       if(!specs.length)return rawValue;
-      return {...rawValue,quotaWindows:finalizeQuotaWindows(specs,rawValue._quotaWindowCounts||{})};
+      return {...rawValue,quotaWindows:finalizeQuotaWindows(specs,rawValue._quotaWindowCounts||{},checkMeta?rawValue._quotaWindowMeta||null:null,{estimator:this.quotaEstimator,accountKey:quotaAccount,allowUpdate,days:rawValue.days,today:rawValue.today||today})};
     };
     const cached=this.caches.get(cacheKey);
+    const fallbackCached=cached||this.findFallbackSummaryCache(cacheTag);
     const unknown=()=>({accountKey:allBuckets?'all-local':scope,timeZone:this.timeZone,today,days:[],models:[],todayTokens:null,weekTokens:null,monthTokens:null,totalTokens:null,requests:null,unreadableFiles:0,source:this.source,summaryStale:true,...(allBuckets?{accountsCount:0}:{}),...(specs.length?{quotaWindows:{}}:{}),});
     const writing=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
-    if(writing)return cached?{...finalize(cached.value),summaryStale:true}:unknown();
-    if(cached&&cached.revision===this.revision)return finalize(cached.value);
+    if(writing)return fallbackCached?{...finalize(fallbackCached.value,!cached,false),summaryStale:true}:unknown();
+    if(cached&&cached.revision===this.revision)return finalize(cached.value,false,true);
     if(preferCachedMaxAgeMs>0&&cached&&Number.isFinite(cached.at)&&now>=cached.at&&now-cached.at<preferCachedMaxAgeMs){
-      return {...finalize(cached.value),summaryStale:true};
+      return {...finalize(cached.value,false,false),summaryStale:true};
     }
     const scanRevision=this.revision;
     const bucketNames=allBuckets?await this.listAccountBuckets():[scope];
@@ -351,68 +418,126 @@ export class UsageLedger{
       bucketEntries.push({dir:b,files});
     }
     if(hasSqlite){
-      this.startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent,{buckets:allBuckets?bucketNames:null,quotaAccount,groupInfos,specs});
-      return cached?{...finalize(cached.value),summaryStale:true}:unknown();
+      this.startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent,{buckets:allBuckets?bucketNames:null,quotaAccount,groupInfos,specs,cacheTag});
+      return fallbackCached?{...finalize(fallbackCached.value,!cached,false),summaryStale:true}:unknown();
+    }
+    // Never open the shared SQLite index on the main thread while a worker is
+    // already updating it, and offload multi-file (>16) foreground polls to the
+    // disk worker even when the SQLite index already exists so synchronous
+    // DatabaseSync calls cannot freeze the event loop past maxWaitMs.
+    if(maxWaitMs>0&&this.diskSummaryPending){
+      return fallbackCached?{...finalize(fallbackCached.value,!cached,false),summaryStale:true}:unknown();
+    }
+    if(maxWaitMs>0&&this.readSummaryRecord===UsageLedger.prototype.readSummaryRecord){
+      let totalFiles=0;
+      for(const entry of bucketEntries){
+        for(const name of entry.files)if(/^[a-f0-9]{64}\.json$/.test(name))totalFiles++;
+      }
+      if(totalFiles>16){
+        if(!isCurrent())return null;
+        const dirtySnapshot=this._dirtySources.size?[...this._dirtySources]:null;
+        this.startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent,{buckets:allBuckets?bucketNames:null,quotaAccount,groupInfos,specs,cacheTag,dirtyFiles:dirtySnapshot,revisionRetryMs:2000});
+        const pending=this.diskSummaryPending;
+        if(pending){
+          let timer;
+          try{
+            const raced=await Promise.race([
+              pending.then(v=>({done:true,value:v})),
+              new Promise(resolve=>{timer=setTimeout(()=>resolve({done:false}),maxWaitMs);timer.unref?.();}),
+            ]);
+            if(raced.done&&raced.value){
+              if(!isCurrent())return null;
+              const stillWriting=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
+              if(this.revision===scanRevision&&!stillWriting)return finalize(raced.value,false,true);
+              return {...finalize(raced.value,false,false),summaryStale:true};
+            }
+          }finally{
+            clearTimeout(timer);
+          }
+          if(!isCurrent())return null;
+        }
+        return fallbackCached?{...finalize(fallbackCached.value,!cached,false),summaryStale:true}:unknown();
+      }
     }
     const pendingKey=cacheKey+'@'+scanRevision;
     let scan=this.jsonSummaryPending.get(pendingKey);
     if(!scan){
       scan=(async()=>{
-        const daily=new Map(),models=new Set(),seen=new Map(),acctIds=new Set(),activeAccounts=new Set();let unreadable=0,unknownTokens=0,unknownRequests=0,partialRequests=0;
-        for(const entry of bucketEntries){
-          const jsonFiles=entry.files.filter(name=>/^[a-f0-9]{64}\.json$/.test(name));
-          for(const name of jsonFiles){
-            try{
-              const text=await this.readSummaryRecord(join(this.directory,entry.dir,name));
-              const record=JSON.parse(text);if(record.schema!==1||record.account!==entry.dir||!Array.isArray(record.records)||!record.records.every(validRow))throw Error('Invalid ledger');
-              if(entry.dir!==LOCAL_SCOPE&&record.records.length)activeAccounts.add(entry.dir);
-              for(const r of record.records){const previous=seen.get(r.id);if(!previous||sum(r)>sum(previous))seen.set(r.id,r);if(entry.dir===quotaAccount)acctIds.add(r.id);}
-            }catch{unreadable++;}
-          }
+        const dirtySnapshot=this._dirtySources.size?new Set(this._dirtySources):null;
+        const runIndex=()=>syncAndSummarizeIndex({
+          directory:this.directory,
+          scope,
+          buckets:bucketEntries,
+          now,
+          timeZone:this.timeZone,
+          source:this.source,
+          localScope:LOCAL_SCOPE,
+          quotaAccount,
+          quotaGroups:groupInfos,
+          quotaWindowSpecs:specs,
+          classifyQuotaGroupId,
+          readRecord:file=>this.readSummaryRecord(file),
+          dirtyFiles:dirtySnapshot,
+          yieldEveryMs:8,
+          busyTimeoutMs:250,
+        });
+        const next=this._indexQueue.catch(()=>{}).then(runIndex);
+        this._indexQueue=next.catch(()=>{});
+        const raw=await next;
+        if(dirtySnapshot&&this.revision===scanRevision){
+          for(const k of dirtySnapshot)this._dirtySources.delete(k);
         }
-        const normalizeModel=createUsageModelNormalizer(),windowCounts={};
-        for(const r of seen.values()){
-          const model=normalizeModel(r.model);
-          models.add(model);if(r.partial)partialRequests++;
-          if(specs.length&&r.at!==null&&acctIds.has(r.id)){
-            const gid=classifyQuotaGroupId(groupInfos,model);
-            for(const spec of specs)if(spec.groupId===gid&&r.at>=spec.startAt&&r.at<=spec.endAt){
-              const item=windowCounts[spec.id]||{observedTokens:0,requests:0};item.observedTokens+=sum(r);item.requests++;windowCounts[spec.id]=item;
-            }
-          }
-          if(r.at===null){unknownTokens+=sum(r);unknownRequests++;continue;}
-          const date=dateKey(r.at,this.timeZone);if(!daily.has(date))daily.set(date,{date,models:{}});
-          const day=daily.get(date);if(!Object.hasOwn(day.models,model))Object.defineProperty(day.models,model,{value:{uncached:0,cacheRead:0,cacheWrite:0,output:0,total:0,requests:0},enumerable:true,writable:true,configurable:true});
-          const bucket=day.models[model];for(const key of keys)bucket[key]+=r[key]??0;bucket.total+=sum(r);bucket.requests++;
+        const {quotaWindowCounts,...value}=raw;
+        if(specs.length){
+          Object.defineProperty(value,'_quotaWindowCounts',{value:quotaWindowCounts||{},enumerable:false,configurable:true});
+          Object.defineProperty(value,'_quotaWindowMeta',{value:quotaWindowMeta(specs),enumerable:false,configurable:true});
         }
-        const days=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date));
-        const total=day=>Object.values(day.models).reduce((n,r)=>n+r.total,0);
-        const value={accountKey:allBuckets?'all-local':scope,timeZone:this.timeZone,today,days,models:[...models].sort(),todayTokens:days.filter(d=>d.date===today).reduce((n,d)=>n+total(d),0),
-          weekTokens:days.filter(d=>d.date>=weekStart(today)&&d.date<=today).reduce((n,d)=>n+total(d),0),
-          monthTokens:days.filter(d=>d.date.slice(0,7)===today.slice(0,7)&&d.date<=today).reduce((n,d)=>n+total(d),0),
-          totalTokens:days.reduce((n,d)=>n+total(d),0)+unknownTokens,unknownTokens,unknownRequests,partialRequests,unreadableFiles:unreadable,
-          requests:seen.size,firstDate:days[0]?.date||null,updatedAt:new Date(now).toISOString(),source:this.source,...(allBuckets?{accountsCount:activeAccounts.size}:{})};
-        if(specs.length)Object.defineProperty(value,'_quotaWindowCounts',{value:windowCounts,enumerable:false,configurable:true});
+        const stillWriting=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
+        if(this.revision===scanRevision&&!stillWriting){
+          this.storeSummaryCache(cacheKey,{key:cacheKey,tag:cacheTag,revision:scanRevision,at:now,value});
+        }
         return value;
       })().finally(()=>{if(this.jsonSummaryPending.get(pendingKey)===scan)this.jsonSummaryPending.delete(pendingKey);});
       this.jsonSummaryPending.set(pendingKey,scan);
     }
-    const value=await scan;
+    let value;
+    if(maxWaitMs>0){
+      let timer;
+      try{
+        const raced=await Promise.race([
+          scan.then(v=>({done:true,value:v})),
+          new Promise(resolve=>{timer=setTimeout(()=>resolve({done:false}),maxWaitMs);timer.unref?.();}),
+        ]);
+        if(!raced.done){
+          scan.catch(()=>{});
+          if(!isCurrent())return null;
+          return fallbackCached?{...finalize(fallbackCached.value,!cached,false),summaryStale:true}:unknown();
+        }
+        value=raced.value;
+      }catch{
+        if(!isCurrent())return null;
+        return fallbackCached?{...finalize(fallbackCached.value,!cached,false),summaryStale:true}:unknown();
+      }finally{
+        clearTimeout(timer);
+      }
+    }else{
+      value=await scan;
+    }
     if(!isCurrent())return null;
     const stillWriting=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
-    if(this.revision===scanRevision&&!stillWriting){const entry={key:cacheKey,revision:scanRevision,at:now,value};this._cache=entry;this.caches.set(cacheKey,entry);return finalize(value);}
-    return {...finalize(value),summaryStale:true};
+    if(this.revision===scanRevision&&!stillWriting){const entry={key:cacheKey,tag:cacheTag,revision:scanRevision,at:now,value};this.storeSummaryCache(cacheKey,entry);return finalize(value,false,true);}
+    return {...finalize(value,false,false),summaryStale:true};
   }
 }
 export function weekStart(date){const d=new Date(date+'T00:00:00Z');d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return d.toISOString().slice(0,10);}
 
 export class DesktopUsage{
   constructor(store,ledger=new UsageLedger(),{host=null,discoverLocal=null,owns=()=>true,now=Date.now,sliceMs=1500,continueDelay=1200,itemDelay=undefined,
-    maxCandidates=20,maxCandidatesPerSlice=8,maxPassMs=15000,maxMapEntries=4096,localScanMs=30000,
+    maxCandidates=20,maxCandidatesPerSlice=8,maxPassMs=15000,maxMapEntries=4096,localScanMs=30000,memorySoftLimitBytes=128*1024*1024,
     liveMaxConversations=16,liveMaxRows=8192,liveMaxBytes=4*1024*1024,liveMaxGroups=128,liveMaxRecoveryGuards=16,liveMaxRecoveries=256,liveRetryMs=1000,livePollMs=1000,liveRecoveryPollMs=1000,liveBackgroundPollMs=1000,liveBackgroundRetryMs=60000}={}){
     this.store=store;this.ledger=ledger;this.fingerprints=new Map();this.host=host;this.owns=()=>owns()===true;this.now=now;
     this.discoverLocal=discoverLocal||(()=>host?discoverLocalConversations({host}):Promise.resolve({conversations:[],errors:0}));
-    this.customDiscover=Boolean(discoverLocal);this.localScanMs=localScanMs;this.localScanAt=-Infinity;this.localScanResult=null;
+    this.customDiscover=Boolean(discoverLocal);this.localScanMs=localScanMs;this.localScanAt=-Infinity;this.localScanResult=null;this.memorySoftLimitBytes=memorySoftLimitBytes;
     this.sliceMs=sliceMs;this.continueDelay=continueDelay;this.itemDelay=Number.isFinite(itemDelay)&&itemDelay>=0?itemDelay:(continueDelay>=100?80:0);this.maxCandidates=maxCandidates;this.maxCandidatesPerSlice=maxCandidatesPerSlice;
     this.maxPassMs=maxPassMs;this.maxMapEntries=maxMapEntries;this.fullRemaining=new Map();this.fullJournal=null;this.fullMissing=0;this.passSeen=new Set();this.passFailures=new Set();this.readFailures=new Map();this.delegatedCandidates=new Map();
     this.liveMaxConversations=liveMaxConversations;this.liveMaxRows=liveMaxRows;this.liveMaxBytes=liveMaxBytes;this.liveMaxGroups=liveMaxGroups;this.liveMaxRecoveryGuards=liveMaxRecoveryGuards;this.liveMaxRecoveries=liveMaxRecoveries;this.liveRetryMs=liveRetryMs;this.livePollMs=livePollMs;
@@ -432,7 +557,15 @@ export class DesktopUsage{
   capMap(map){while(map.size>this.maxMapEntries)map.delete(map.keys().next().value);}
   async ingest(scope,id,raw){
     const epoch=this.store.epoch,current=()=>!this.disposed&&this.owns()&&scope===this.writeScope()&&epoch===this.store.epoch;
-    if(!current())return;this.rememberDelegates(scope,id,raw);await this.ledger.ingest(scope,id,raw,{isCurrent:current});
+    if(!current())return;this.rememberDelegates(scope,id,raw);
+    if(this.ledger.ingest===UsageLedger.prototype.ingest){
+      const rows=usageRecords(raw,id);
+      const ownedRows=await this.ledger.filterForeignOwnedRows(scope,rows,{isCurrent:current});
+      if(!current()||!ownedRows.length)return;
+      await this.ledger.ingestRows(scope,id,ownedRows,{isCurrent:current});
+      return;
+    }
+    await this.ledger.ingest(scope,id,raw,{isCurrent:current});
   }
   // Foreground metrics do not await usage persistence: a SQLite import or
   // summary can take seconds. Only bounded numeric rows cross this boundary.
@@ -569,7 +702,9 @@ export class DesktopUsage{
     try{
       if(state.batch){
         const batch=state.batch,current=()=>state.current()&&guardActive(batch.guard);
-        await this.ledger.ingestRows(state.scope,state.id,[...batch.rows.values()],{isCurrent:current});
+        const ownedRows=await this.ledger.filterForeignOwnedRows(state.scope,[...batch.rows.values()],{isCurrent:current});
+        if(!state.current())return;
+        if(ownedRows.length)await this.ledger.ingestRows(state.scope,state.id,ownedRows,{isCurrent:current});
         if(!state.current())return;
         this.releaseLiveGroup(batch);state.batch=null;if(state.failureKind==='write'){state.failed=false;state.failureKind=null;state.failures=0;}if(current())state.persistedForegroundVersion=batch.foregroundVersion;
       }else{
@@ -718,6 +853,11 @@ export class DesktopUsage{
       const settled=s?.modifiedAt&&/IDLE|DONE|COMPLETED|CANCELLED|CANCELED|STOPPED|FAILED|ERROR/.test(String(s.status||''));
       if(!forced&&!old?.hasDelegates&&(c.signature?unchanged&&old.state==='complete'&&(!s||cached||settled):cached))continue;
       if(processed&&this.now()-started>=this.sliceMs){more=completePass;break;}
+      if(processed&&this.memorySoftLimitBytes>0&&process.memoryUsage().heapUsed>=this.memorySoftLimitBytes){
+        this.store.client?.reader?.trim?.();
+        this.store.trimSessions?.();
+        more=completePass;break;
+      }
       processed++;
       this.passSeen.add(c.id);this.capMap(this.passSeen);
       this.fullRemaining.delete(c.id);
@@ -781,14 +921,14 @@ export class DesktopUsage{
     const confirmed=[...this.passFailures].filter(id=>(journal[hash(id)]?.failures||this.readFailures.get(id)?.failures||0)>=2).length;
     return {current,missing:missing+this.passFailures.size,confirmed,retrying:missing+this.passFailures.size-confirmed,more,partial};
   }
-  async snapshot({sync=true,scope=undefined,groups=null}={}){
+  async snapshot({sync=true,scope=undefined,groups=null,maxWaitMs=0}={}){
     this.refreshLiveScope();
     const identity=this.store.identity,writeScope=this.writeScope(),epoch=this.store.epoch;
     const requestedScope=scope===undefined?(identity?'account':'local'):(scope==='account'?'account':'local');
     if(this.scope!==writeScope||this.scopeEpoch!==epoch){this.lastSync=0;this.status='waiting';this.missingConversations=0;this.confirmedMissingConversations=0;this.retryingConversations=0;if(this.pending)this.forceQueued=true;}
     if(sync&&this.now()-this.lastSync>60000&&!this.continuation)void this.sync();
     const current=()=>!this.disposed&&this.owns()&&writeScope===this.writeScope()&&epoch===this.store.epoch;
-    const syncing=this.syncing||!!this.continuation||!!this.ledger.diskSummaryPending||!!this.ledger.diskWrites;
+    const syncing=this.syncing||!!this.continuation||!!this.ledger.diskSummaryPending||!!this.ledger.diskWrites||this.ledger.jsonSummaryPending.size>0;
     const backfillActive=this.syncing||Boolean(this.continuation);
     if(requestedScope==='account'&&!identity){
       const today=dateKey(Date.now(),this.ledger.timeZone),accountsCount=await this.ledger.countAccounts();
@@ -796,14 +936,14 @@ export class DesktopUsage{
       return {accountKey:null,activeAccountKey:null,scope:'account',accountAvailable:false,accountsCount,timeZone:this.ledger.timeZone,today,days:[],models:[],todayTokens:0,weekTokens:0,monthTokens:0,totalTokens:0,unknownTokens:0,unknownRequests:0,partialRequests:0,unreadableFiles:0,requests:0,firstDate:null,updatedAt:new Date().toISOString(),source:this.ledger.source,quotaWindows:{},syncing,status:syncing?'syncing':this.status,missingConversations:this.missingConversations,confirmedMissingConversations:this.confirmedMissingConversations,retryingConversations:this.retryingConversations,persistenceError:this.store.usagePersistenceError===true||this.ledger.diskSummaryError===true};
     }
     const ledgerTarget=requestedScope==='account'?identity:'all';
-    const value=await this.ledger.summary(ledgerTarget,Date.now(),{isCurrent:current,groups:identity?groups:null,quotaAccount:identity,preferCachedMaxAgeMs:backfillActive?5000:0});if(!current())return null;
-    if(scope!==undefined&&!syncing&&!value?.summaryStale&&identity&&!this.ledger.diskSummaryPending&&!this.ledger.usageWrites.size){
+    const value=await this.ledger.summary(ledgerTarget,Date.now(),{isCurrent:current,groups:identity?groups:null,quotaAccount:identity,preferCachedMaxAgeMs:backfillActive?5000:0,maxWaitMs});if(!current())return null;
+    if(scope!==undefined&&!syncing&&!value?.summaryStale&&identity&&!this.ledger.diskSummaryPending&&!this.ledger.jsonSummaryPending.size&&!this.ledger.usageWrites.size){
       const otherScope=requestedScope==='local'?identity:'all';
       const prefix=otherScope+':'+value.today;
-      if(![...this.ledger.caches.keys()].some(k=>k.startsWith(prefix)))void this.ledger.summary(otherScope,Date.now(),{isCurrent:current,groups,quotaAccount:identity}).catch(()=>{});
+      if(![...this.ledger.caches.keys()].some(k=>k.startsWith(prefix)))void this.ledger.summary(otherScope,Date.now(),{isCurrent:current,groups,quotaAccount:identity,maxWaitMs:350}).catch(()=>{});
     }
     const stillSyncing=syncing||value?.summaryStale===true;
     return {...value,scope:requestedScope,accountKey:requestedScope==='local'?'all-local':identity,activeAccountKey:identity||null,accountAvailable:Boolean(identity),syncing:stillSyncing,status:stillSyncing?'syncing':this.status,missingConversations:this.missingConversations,confirmedMissingConversations:this.confirmedMissingConversations,retryingConversations:this.retryingConversations,persistenceError:this.store.usagePersistenceError===true||this.ledger.diskSummaryError===true};
   }
-  dispose(){this.disposed=true;this.forceQueued=false;clearTimeout(this.continuation);this.continuation=null;clearTimeout(this.liveRecoveryTimer);this.liveRecoveryTimer=null;this.refreshLiveScope();this.fullRemaining.clear();this.fullJournal=null;}
+  dispose(){this.disposed=true;this.forceQueued=false;clearTimeout(this.continuation);this.continuation=null;clearTimeout(this.liveRecoveryTimer);this.liveRecoveryTimer=null;this.refreshLiveScope();this.fullRemaining.clear();this.fullJournal=null;this.ledger?.quotaEstimator?.dispose();}
 }

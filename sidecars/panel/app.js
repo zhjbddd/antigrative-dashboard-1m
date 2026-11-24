@@ -21,10 +21,10 @@ const tokUnit=n=>n===1?'tok':'toks';
 const compactDetail=n=>{if(typeof n!=='number'||!Number.isFinite(n))return '—';for(const [base,suffix,nextBase,nextSuffix]of [[1e12,'T',0,''],[1e9,'B',1e12,'T'],[1e6,'M',1e9,'B'],[1e3,'K',1e6,'M']])if(n>=base){const scaled=n/base,rounded=Number(scaled.toFixed(scaled<10?2:1));return nextBase&&rounded*base>=nextBase?`1${nextSuffix}`:`${rounded}${suffix}`;}return String(n);};
 const chips = [...document.querySelectorAll('[data-card]')];
 let snapshot = null, selectedGroup = null, group = null, autoGroupId = null, lastModelSig = null;
+let lastQuotaUsageAccount = null; const lastQuotaWindowUsage = new Map();
 let pending = false, timer = null, serverOffset = 0, lastExpiredRefresh = 0;
 let selectedCard='speed',cardMotion=null;
 let refreshRequest=null,manualRequest=null;
-let relaunchBusy=false,relaunchStatusKey='',autoRelaunchState={busy:false,error:false,revision:-1,value:true};
 const host = window.sidecar;
 if (!host) document.body.classList.add('standalone');
 const preferenceRequest=async(input)=>{
@@ -84,10 +84,17 @@ function renderQuota(window, prefix, now = Date.now() + serverOffset) {
   const remaining = language.quotaRemaining(bucket);
   $(`${prefix}-balance`).textContent = bucket?.disabled?t('unavailableQuota'):percent(remaining);
   const forecast = language.quotaForecast(bucket, window, now);
-  const barBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : '';
-  const fill = $(`${prefix}-fill`), track = $(`${prefix}-track`);
+  const barBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : (remaining !== null && remaining < .2) || forecast?.willExhaust ? 'var(--pulse-warning)' : '';
+  const fill = $(`${prefix}-fill`), projectedFill = $(`${prefix}-projected-fill`), track = $(`${prefix}-track`);
+  // Solid fill is always the real balance; the hatched tail marks what the
+  // current pace is expected to consume before the window resets.
+  const hatch = Boolean(forecast?.forecastReady && remaining !== null && forecast.projectedRemaining < remaining - 0.005);
   fill.style.width = typeof remaining === 'number' ? `${remaining * 100}%` : '0%';
   fill.style.background = barBg;
+  if (projectedFill) {
+    projectedFill.style.left = hatch ? `${forecast.projectedRemaining * 100}%` : '0%';
+    projectedFill.style.width = hatch ? `${(remaining - forecast.projectedRemaining) * 100}%` : '0%';
+  }
   const forecastRow = $(`${prefix}-forecast`), forecastMain = $(`${prefix}-forecast-text`);
   if (forecastRow && forecastMain) {
     const showForecast = Boolean(forecast && typeof forecast.timeRemaining === 'number');
@@ -110,7 +117,25 @@ function renderQuota(window, prefix, now = Date.now() + serverOffset) {
   hidden(`${prefix}-note`, !unavailableNote);
   const usageRow = $(`${prefix}-usage`);
   if (usageRow) {
-    const winUsage = group?.id && !bucket?.disabled && bucket?.available ? snapshot?.usage?.quotaWindows?.[`${group.id}:${window}`] : null;
+    const usageAccount = snapshot?.usage?.activeAccountKey ?? null;
+    if (snapshot?.usage && usageAccount !== lastQuotaUsageAccount) { lastQuotaUsageAccount = usageAccount; lastQuotaWindowUsage.clear(); }
+    const winKey = group?.id ? `${group.id}:${window}` : null;
+    const resetMs = typeof bucket?.resetAt === 'string' ? Date.parse(bucket.resetAt) : NaN;
+    const resetMinute = Number.isFinite(resetMs) ? Math.round(resetMs / 60000) : null;
+    const rawWinUsage = winKey && !bucket?.disabled && bucket?.available ? snapshot?.usage?.quotaWindows?.[winKey] : null;
+    let winUsage = rawWinUsage && typeof rawWinUsage.observedTokens === 'number' && rawWinUsage.observedTokens > 0 ? rawWinUsage : null;
+    if (winKey && winUsage) {
+      lastQuotaWindowUsage.set(winKey, { resetMinute, usage: winUsage });
+    } else if (winKey && !bucket?.disabled && bucket?.available && (snapshot?.usage?.summaryStale === true || !snapshot?.usage) && resetMinute !== null) {
+      const prev = lastQuotaWindowUsage.get(winKey);
+      if (prev && prev.resetMinute !== null && Math.abs(prev.resetMinute - resetMinute) <= 2) {
+        const usedFrac = typeof remaining === 'number' ? Math.max(0, Math.min(1, 1 - remaining)) : null;
+        const estFull = prev.usage.estimatedFullTokens ?? (prev.usage.observedTokens > 0 && usedFrac !== null && usedFrac >= 0.05 ? Math.round(prev.usage.observedTokens / usedFrac) : null);
+        winUsage = { ...prev.usage, estimatedFullTokens: estFull };
+      }
+    } else if (winKey && snapshot?.usage && snapshot.usage.summaryStale !== true) {
+      lastQuotaWindowUsage.delete(winKey);
+    }
     const showUsage = Boolean(winUsage && typeof winUsage.observedTokens === 'number' && winUsage.observedTokens > 0);
     hidden(`${prefix}-usage`, !showUsage);
     if (showUsage) {
@@ -249,7 +274,7 @@ function render() {
         if (valEl && valEl.textContent !== val) valEl.textContent = val;
         if (fillEl) {
           const nextWidth = typeof remaining === 'number' ? `${remaining * 100}%` : '0%';
-          const nextBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : '';
+          const nextBg = remaining !== null && remaining < .05 ? 'var(--pulse-danger)' : remaining !== null && remaining < .2 ? 'var(--pulse-warning)' : '';
           if (fillEl.style.width !== nextWidth) fillEl.style.width = nextWidth;
           if (fillEl.style.background !== nextBg) fillEl.style.background = nextBg;
         }
@@ -367,100 +392,12 @@ function render() {
   const timestamp = snapshot.quotaUpdatedAt ? new Date(snapshot.quotaUpdatedAt).toLocaleTimeString(language.language,{hour12:false}) : null;
   $('health-note').textContent = (collectionProcessing?t('collectionProcessingReason'):collectionLimited?t('collectionReason'):language.errorMessage(snapshot.error||snapshot.sessionError)) || (timestamp ? t('health',{time:timestamp}) : t('firstUpdate'));
   $('health-note').classList.toggle('warning', snapshot.connection !== 'live' || !!snapshot.sessionError || collectionLimited);
-  renderIntegrationNote();
+  const integration = snapshot.integration;
+  const integrationKey = !integration || ['mounted','disabled'].includes(integration.state) ? ''
+    : integration.reason === 'remote-hub' ? 'panelRemoteHub'
+    : integration.reason === 'debug-port-disabled' ? (integration.launchConfigured ? 'panelDebugPortReady' : 'panelDebugPortManual') : 'panelInlineReconnecting';
+  $('integration-note').textContent = integrationKey ? t(integrationKey) : '';
   updateCountdowns();
-}
-
-function renderIntegrationNote(){
-  const note=$('integration-note');if(!note)return;
-  const integration=snapshot?.integration;
-  if(!integration||['mounted','disabled'].includes(integration.state)){
-    note.classList.remove('has-action','warning');
-    delete note.dataset.mode;
-    relaunchStatusKey='';autoRelaunchState.error=false;
-    if(note.childNodes.length)note.replaceChildren();
-    return;
-  }
-  const isMissingPort=integration.reason==='missing-debug-port'||integration.reason==='debug-port-disabled';
-  if(!isMissingPort){
-    note.classList.remove('has-action','warning');
-    delete note.dataset.mode;
-    relaunchStatusKey='';autoRelaunchState.error=false;
-    const msg=t('panelInlineReconnecting');
-    if(note.textContent!==msg)note.textContent=msg;
-    return;
-  }
-  note.classList.add('has-action','warning');
-  if(note.dataset.mode!=='missing-debug-port'){
-    note.dataset.mode='missing-debug-port';
-    const message=document.createElement('span');message.className='integration-message';message.id='integration-message';
-    const actions=document.createElement('div');actions.className='integration-actions';
-    const button=document.createElement('button');button.type='button';button.className='integration-relaunch-btn';button.id='relaunch-debug-button';
-    const status=document.createElement('span');status.className='integration-status';status.id='relaunch-debug-status';status.hidden=true;
-    actions.append(button,status);
-    const label=document.createElement('label');label.className='integration-auto-label';
-    const toggle=document.createElement('input');toggle.type='checkbox';toggle.id='auto-relaunch-toggle';
-    const labelText=document.createElement('span');labelText.id='auto-relaunch-label';
-    label.append(toggle,labelText);
-    note.replaceChildren(message,actions,label);
-    button.addEventListener('click',async()=>{
-      if(relaunchBusy)return;
-      relaunchBusy=true;relaunchStatusKey='relaunchingDebug';autoRelaunchState.error=false;
-      renderIntegrationNote();
-      try{
-        const transport=host?.fetch?host.fetch.bind(host):fetch;
-        const response=await transport('/api/relaunch-debug',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-        if(!response.ok){relaunchStatusKey='relaunchDebugFailed';}
-        else{
-          const result=await response.json();
-          if(result?.scheduled)relaunchStatusKey='relaunchingDebug';
-          else if(['cooldown','debounced','already-scheduled-for-pids'].includes(result?.reason))relaunchStatusKey='relaunchDebugCooldown';
-          else if(result?.reason==='host-not-running')relaunchStatusKey='relaunchDebugNotRunning';
-          else relaunchStatusKey='relaunchDebugFailed';
-        }
-      }catch{relaunchStatusKey='relaunchDebugFailed';}
-      finally{relaunchBusy=false;renderIntegrationNote();}
-    });
-    toggle.addEventListener('change',async()=>{
-      const next=toggle.checked;
-      autoRelaunchState.busy=true;autoRelaunchState.error=false;autoRelaunchState.value=next;
-      renderIntegrationNote();
-      try{
-        const saved=await preferenceRequest({autoRelaunchDebug:next});
-        const rev=Number.isSafeInteger(saved?.revision)?saved.revision:0;
-        autoRelaunchState.revision=Math.max(autoRelaunchState.revision,rev);
-        autoRelaunchState.value=!saved?.error&&saved?.autoRelaunchDebug!==false;
-        if(snapshot)snapshot.preferences=saved;
-      }catch{
-        autoRelaunchState.value=!next;
-        toggle.checked=!next;
-        autoRelaunchState.error=true;
-      }finally{
-        autoRelaunchState.busy=false;
-        renderIntegrationNote();
-      }
-    });
-  }
-  const msgKey=integration.reason==='debug-port-disabled'
-    ?(integration.launchConfigured?'panelDebugPortReady':'panelDebugPortManual')
-    :'missingDebugPort';
-  text('integration-message',t(msgKey));
-  const button=$('relaunch-debug-button');
-  if(button){button.disabled=relaunchBusy;button.textContent=t(relaunchBusy?'relaunchingDebug':'relaunchDebugButton');}
-  text('auto-relaunch-label',t('autoRelaunchLabel'));
-  const prefRev=Number.isSafeInteger(snapshot?.preferences?.revision)?snapshot.preferences.revision:0;
-  if(!autoRelaunchState.busy&&!autoRelaunchState.error&&!snapshot?.preferences?.error&&prefRev>=autoRelaunchState.revision){
-    autoRelaunchState.revision=prefRev;
-    autoRelaunchState.value=snapshot?.preferences?.autoRelaunchDebug!==false;
-  }
-  const toggle=$('auto-relaunch-toggle');
-  if(toggle)toggle.checked=autoRelaunchState.value;
-  const statusKey=autoRelaunchState.error?'autoRelaunchSaveFailed':relaunchStatusKey;
-  const statusEl=$('relaunch-debug-status');
-  if(statusEl){
-    statusEl.hidden=!statusKey;
-    if(statusKey)statusEl.textContent=t(statusKey);else if(statusEl.textContent)statusEl.textContent='';
-  }
 }
 
 function updateCountdowns() {

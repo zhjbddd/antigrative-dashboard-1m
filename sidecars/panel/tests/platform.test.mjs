@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { platformPaths,agentExecutables } from '../../../compat/platform.mjs';
+import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { platformPaths,agentExecutables,isRemoteHeadlessHost } from '../../../compat/platform.mjs';
 import { parsePs,parseLsof,parseProcNet,parseNetstat,linuxPorts,discoverProcesses } from '../discovery.mjs';
 import { serverFromDiscovery,AntigravityClient } from '../client.mjs';
 import { createServer } from 'node:net';
@@ -26,11 +29,6 @@ test('macOS ps and lsof records isolate user, standalone process, PID and ports'
   assert.deepEqual(ports.get(12),[1234,4321]);
   const rows=await discoverProcesses({platform:'darwin',uid:501,run:async file=>({stdout:file==='/bin/ps'?ps:'p12\nn127.0.0.1:1234\n'})});
   assert.deepEqual(serverFromDiscovery('listening on random port at 1234 for HTTP\n',rows),{port:1234,pid:12,csrf:'test'});
-
-  const nativePs=' 15 501 /Applications/Antigravity.app/Contents/Resources/bin/language_server.native --standalone --csrf_token=native-test\n 16 501 /bin/language_server.native --sidecar';
-  const nativeRows=await discoverProcesses({platform:'darwin',uid:501,run:async file=>({stdout:file==='/bin/ps'?nativePs:'p15\nn127.0.0.1:5678\n'})});
-  assert.equal(nativeRows.length,1);
-  assert.deepEqual(serverFromDiscovery('listening on random port at 5678 for HTTP\n',nativeRows),{port:5678,pid:15,csrf:'native-test'});
 });
 test('Linux /proc TCP parsing accepts only listening sockets with exact owned inodes',()=>{
   const rows=parseProcNet(' sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n 0: 0100007F:3039 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 91234\n 1: 0100007F:303A 00000000:0000 01 0 0 0 1000 0 91235');
@@ -162,4 +160,44 @@ test('failed or foreign-PID fallback cannot turn a stale log into a usable endpo
  }});
  assert.equal(calls.length,3);assert.deepEqual(rows[0].Ports,[]);
  assert.throws(()=>serverFromDiscovery('listening on random port at 1234 for HTTP\n',rows),/接口启动/);
+});
+
+test('Linux SSH hub logs (~/.antigravity-hub-server/data/ls-*.log), daemonDir and hub binaries are discovered',async t=>{
+ const home=await mkdtemp(join(tmpdir(),'ag-ssh-hub-home-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ const dataDir=join(home,'.antigravity-hub-server','data');
+ const binDir=join(home,'.antigravity-hub-server','bin','2.34.0-x64');
+ await mkdir(dataDir,{recursive:true});
+ await mkdir(binDir,{recursive:true});
+ const older=join(dataDir,'ls-2.33.0.log'),newer=join(dataDir,'ls-2.34.0.log'),ignored=join(dataDir,'other.log');
+ await writeFile(older,'old\n');await writeFile(newer,'new\n');await writeFile(ignored,'ignore\n');
+ await utimes(older,new Date(10000),new Date(10000));
+ await utimes(newer,new Date(20000),new Date(20000));
+ const hubBin=join(binDir,'language_server');
+ await writeFile(hubBin,'binary');
+
+ const p=platformPaths({platform:'linux',home,env:{}});
+ const norm=v=>v.replaceAll('\\','/');
+ assert.equal(norm(p.daemonDir),norm(join(home,'.gemini','antigravity','daemon')));
+ assert.deepEqual(p.logCandidates.map(norm),[norm(p.log),norm(newer),norm(older)]);
+ assert.deepEqual(platformPaths({platform:'linux',home,env:{AG_PULSE_LOG:'/explicit.log'}}).logCandidates,['/explicit.log']);
+ const exes=agentExecutables({platform:'linux',home,env:{}}).map(norm);
+ assert.ok(exes.includes(norm(hubBin)));
+});
+
+test('isRemoteHeadlessHost distinguishes SSH/WSL remote hubs from local desktop and WSLg GUI hosts',()=>{
+ // Explicit remoteHub server metadata always wins regardless of platform/DISPLAY.
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{DISPLAY:':0'},server:{remoteHub:true},hasLocalHostApp:false}),true);
+ assert.equal(isRemoteHeadlessHost({platform:'darwin',env:{},server:{remoteHub:true},hasLocalHostApp:true}),true);
+ // Local desktop Windows/macOS are never headless remote unless server.remoteHub is true.
+ assert.equal(isRemoteHeadlessHost({platform:'win32',env:{},server:null,hasLocalHostApp:false}),false);
+ assert.equal(isRemoteHeadlessHost({platform:'darwin',env:{},server:null,hasLocalHostApp:false}),false);
+ // Linux SSH/WSL headless without local app.asar -> remote headless.
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{SSH_CONNECTION:'1.2.3.4 1 2 3'},hasLocalHostApp:false}),true);
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{WSL_DISTRO_NAME:'Ubuntu'},hasLocalHostApp:false}),true);
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{},hasLocalHostApp:false}),true);
+ // Local Linux desktop (with app.asar or GUI DISPLAY/WAYLAND_DISPLAY and no SSH) stays desktop.
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{DISPLAY:':0'},hasLocalHostApp:false}),false);
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{WAYLAND_DISPLAY:'wayland-0'},hasLocalHostApp:false}),false);
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{WSL_DISTRO_NAME:'Ubuntu',DISPLAY:':0'},hasLocalHostApp:false}),false);
+ assert.equal(isRemoteHeadlessHost({platform:'linux',env:{},hasLocalHostApp:true}),false);
 });

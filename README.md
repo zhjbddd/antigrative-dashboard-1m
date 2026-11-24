@@ -1,24 +1,21 @@
 # Antigrative Dashboard (1M Context Edition)
 
-基于开源项目 [`wycocoyu/agy-context-dashboard`](https://github.com/wycocoyu/agy-context-dashboard) (`v0.9.7`, MIT License) 增强的 **1M 上下文真实容量增强版**，适配 **Google Antigravity `2.34.0+`**（兼容 `2.33.x`，支持 Windows / macOS / Linux），可与 [`zhjbddd/codex-1m-compact`](https://github.com/zhjbddd/codex-1m-compact) 配合使用。
+基于开源项目 [`ATtacK030130/antigrative-dashboard`](https://github.com/ATtacK030130/antigrative-dashboard) (`v0.9.16`, MIT License) 增强的 **1M 上下文真实容量与 Antigravity `2.35.0` 适配版**，支持 Windows / macOS / Linux 桌面端与独立 **Antigravity IDE**，可与 [`zhjbddd/codex-1m-compact`](https://github.com/zhjbddd/codex-1m-compact) 配合使用。
 
 ---
 
-## 核心增强特性（相比原版 v0.9.7）
+## 核心增强与 `v0.9.16` 同步特性
 
-1. **修复 `512K` 软上限分母问题，支持真实 `1M`（`1,048,576`）容量显示**：
-   - Antigravity 宿主轨迹接口 `GetCascadeTrajectoryGeneratorMetadata` 默认返回软上限 `maxContextTokens: 512000`，导致原版面板将原生支持 `1M` 的 Gemini / Orchestrator 模型按 `512K` 计算百分比。
-   - 本增强版在模型具备经校验的 `1,048,576`（1M）或更高目录容量时，自动将上下文分母升级为模型真实物理容量（`1M`），同时保留原始 `hostMaxTokens` 字段供参考，并对缺失/非法宿主计数保持安全 `null` 处理。
-2. **新增 `GetAvailableModels` 动态模型目录同步**：
-   - 在配额刷新时自动从本地 Language Server 同步 `GetAvailableModels`，未来 Antigravity 新增模型及上下文容量无需手动改代码即可自动识别。
-3. **补齐最新模型与占位符映射，并扩容 Sidecar 内存上限至 `512MB`**：
-   - 完整支持 `Orchestrator (Carbon)` / `Orchestrator (Argon)`、`Gemini 4 Hydrogen (Orchestrator)`、`Gemini 4 Carbon / Argon / Hydrogen`（含 `tiered-*`）、`Gemini 3 Flash`、`Gemini 3.5 Flash Lite`、`Gemini 3.1 Flash Lite/Image`、`Gemini 2.5 Pro/Flash` 等最新目录模型及配额分组识别。
-   - 将后台 Sidecar 的 V8 堆内存上限由 `192MB` 提升至 `512MB`（`--max-old-space-size=512`），消除 1M 超长会话扫描轨迹时因堆内存不足触发的自重启闪烁。
-4. **完整保留上游 `v0.9.7` 全部能力**：
-   - Antigravity Desktop `2.34.0+` daemon 凭据双校验读取（`~/.gemini/antigravity/daemon/*.json`，兼容移除 `--csrf_token` 的新版）与 `2.33.0+` 快捷方式调试端口自愈
-   - 上下文压缩次数徽标、`75%` / `90%` 容量预警分档、非侵入式版本更新提示
-   - 聊天输入框内嵌状态条（TPS 速度、Prompt 缓存命中率、1M 上下文环、5h / 周额度预测）与右侧辅助栏仪表盘
-   - 简体中文 / 繁体中文 / English 实时切换
+1. **全面适配 Antigravity `2.35.0` 最新模型与真实 `1M` 上下文分母**：
+   - 修复宿主轨迹接口默认返回 `512K` / `200K` 软上限导致百分比失真的问题：对具备经校验 `1M`（`1,048,576` / `1,000,000`）容量的模型自动升级分母，同时保留原始 `hostMaxTokens` 字段供参考。
+   - 补全 `2.35.0` 全量模型与占位符映射：`Gemini 4 Neon`（`M532`–`M535`）、`Orchestrator (Neon)`（`M537` / `gemini-pro-orchestrator-neon`）、`Claude Opus/Sonnet 5.5`（`M400`–`M405`，1M）、`Gemini 3.8 Flash (Tiered)`（`M322`）、`Gemini 4 Hydrogen (Sonar)`（`M578`），以及 `Carbon / Argon / Hydrogen`、`Gemini 3.x / 2.5` 等系列模型。
+   - 在配额刷新时同步调用 `GetAvailableModels` 动态注册未来新增模型，并在 `metrics.mjs` / `history.mjs` 统一规范化模型显示名称。
+2. **彻底消除 512MB OOM 堆内存崩溃（同步上游 `v0.9.16`）**：
+   - 使用常驻增量 SQLite 索引（`.usage-index-v1.sqlite`）替代全量 JS 内存聚合（堆内存稳定在 ~10MB），移除旧 `--max-old-space-size` 硬限制。
+3. **体验与稳定性同步升级（`v0.9.14`–`v0.9.16`）**：
+   - 支持手动折叠迷你状态条（`< ○ 47%`）、USD 成本空间周额度满载容量估算、Antigravity `2.34.0+` daemon 凭据双校验与远程 SSH/WSL Hub 发现。
+   - 消除高负载或慢轮询时的内联状态条闪烁消失问题，包含 `compat/host-theme.mjs` 与 `compat/pricing.cjs` 对独立 Antigravity IDE 的完整支持。
+   - 支持简体中文 / 繁体中文 / English 实时切换。
 
 ---
 
@@ -37,13 +34,12 @@ node install.mjs
 ## 运行单元测试
 
 ```bash
-cd sidecars/panel
-node --test tests/context.test.mjs tests/metrics.test.mjs tests/i18n.test.mjs tests/panel-source.test.mjs tests/store-selection.test.mjs
+node --test --test-timeout=60000 sidecars/panel/tests/*.test.mjs
 ```
 
 ---
 
 ## 致谢与许可
 
-- 上游项目：[`wycocoyu/agy-context-dashboard`](https://github.com/wycocoyu/agy-context-dashboard) (`v0.9.7`)
+- 上游项目：[`ATtacK030130/antigrative-dashboard`](https://github.com/ATtacK030130/antigrative-dashboard) (`v0.9.16`)
 - 开源协议：[MIT License](./LICENSE)

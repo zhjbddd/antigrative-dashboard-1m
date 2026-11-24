@@ -1,56 +1,18 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { open, readFile, readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { lstat, open, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createConnection } from 'node:net';
 import { performance } from 'node:perf_hooks';
 
 const exec = promisify(execFile);
-const languageServer = command => /(?:^|[\/\\])language_server(?:\.native)?(?:_(?:linux|macos|darwin)(?:_(?:x64|arm64))?)?(?:\.exe)?(?:\s|$)/.test(command);
+const languageServer = command => /(?:^|[\/\\])language_server(?:_(?:linux|macos|darwin)(?:_(?:x64|arm64))?)?(?:\.exe)?(?:\s|$)/.test(command);
+const DAEMON_DISCOVERY_FILE = /^(?:ls|hub)_[^/\\]+\.json$/i;
 
-export function isProcessAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === 'EPERM';
-  }
-}
-
-export function discoveryCommandError(error, labels = {}) {
-  const timedOut = Boolean(error?.killed || error?.code === 'ETIMEDOUT');
-  return new Error(timedOut ? (labels.timedOut || '读取 Antigravity 进程信息超时') : (labels.failed || '无法读取 Antigravity 进程信息'));
-}
-
-export async function resolveDaemonCredential({ commandLine = '', pid, ports = [], home = homedir(), daemonDir = null, readFileFn = readFile, readdirFn = readdir } = {}) {
-  const inlineCsrf = String(commandLine || '').match(/--csrf_token(?:=|\s+)"?([^\s"]+)/)?.[1];
-  if (inlineCsrf) return { csrf: inlineCsrf, daemonHttpPort: null };
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  const rawAppDir = String(commandLine || '').match(/--app_data_dir(?:=|\s+)"?([^\s"]+)/)?.[1] || 'antigravity';
-  const appDir = /^[a-zA-Z0-9._-]+$/.test(rawAppDir) ? rawAppDir : 'antigravity';
-  const dir = daemonDir || join(home, '.gemini', appDir, 'daemon');
-  let names;
-  try { names = await readdirFn(dir); } catch { return null; }
-  const portSet = new Set([ports].flat().map(Number).filter(n => Number.isSafeInteger(n) && n > 0 && n <= 65535));
-  let fallback = null;
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    try {
-      const data = JSON.parse(await readFileFn(join(dir, name), 'utf8'));
-      if (Number(data?.pid) !== pid || typeof data?.csrfToken !== 'string' || !data.csrfToken) continue;
-      const httpPort = Number(data.httpPort);
-      const httpsPort = Number(data.httpsPort);
-      const validHttp = Number.isSafeInteger(httpPort) && httpPort > 0 && httpPort <= 65535 ? httpPort : null;
-      const entry = { csrf: data.csrfToken, daemonHttpPort: validHttp };
-      if ((validHttp && portSet.has(validHttp)) || (Number.isSafeInteger(httpsPort) && portSet.has(httpsPort))) {
-        return entry;
-      }
-      if (!fallback) fallback = entry;
-    } catch { /* Ignore unreadable or malformed daemon metadata files. */ }
-  }
-  return fallback;
+export function isRemoteHubCommand(commandLine) {
+  const cmd = String(commandLine || '');
+  return /(?:^|\s)--workspace_id(?:=|\s+)["']?[^"'\s]*ssh\b/i.test(cmd)
+    || /[\/\\]\.antigravity-hub-server[\/\\]/i.test(cmd);
 }
 
 export function httpLogPorts(log) {
@@ -137,6 +99,15 @@ export function parseProcNet(text) {
 
 const validPid = value => Number.isSafeInteger(value) && value > 0 && value <= 0xffffffff;
 const validPort = value => Number.isInteger(value) && value > 0 && value <= 65535;
+export function isProcessAlive(pid) {
+  if (!validPid(pid)) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error?.code === 'EPERM'; }
+}
+export function discoveryCommandError(error, { timedOut = '读取 Antigravity 进程信息超时', failed = '无法读取 Antigravity 进程信息' } = {}) {
+  const isTimeout = Boolean(error?.killed || error?.code === 'ETIMEDOUT' || error?.signal === 'SIGTERM');
+  return new Error(isTimeout ? timedOut : failed);
+}
 const address = value => typeof value === 'string' ? value.toLowerCase().replace(/^\[|\]$/g,'') : '';
 const localAddress = value => ['127.0.0.1','0.0.0.0','::1','::','0:0:0:0:0:0:0:1','0:0:0:0:0:0:0:0','localhost'].includes(address(value));
 const unspecifiedAddress = value => ['0.0.0.0','::','0:0:0:0:0:0:0:0','*'].includes(address(value));
@@ -145,6 +116,88 @@ const endpoint = value => {
   return match ? {address:match[1],port:match[2]} : null;
 };
 const integer = value => typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+
+// Read Antigravity 2.34.0+ daemon discovery files (~/.gemini/antigravity/daemon/{ls,hub}_*.json).
+// Never follow symlinks, bound scanned entries and file sizes, and require same-UID ownership on POSIX.
+// Callers must still pair each record with a live PID and verified listening socket.
+export async function discoverDaemonFiles(daemonDir, {
+  list = readdir,
+  fileStat = lstat,
+  read = readFile,
+  uid = process.getuid?.(),
+  maxScan = 4096,
+  maxFiles = 256,
+  maxBytes = 16384,
+} = {}) {
+  if (!daemonDir || typeof daemonDir !== 'string') return [];
+  try {
+    const dirInfo = await fileStat(daemonDir);
+    if (dirInfo.isSymbolicLink?.() || !dirInfo.isDirectory?.()) return [];
+  } catch {
+    return [];
+  }
+  let entries;
+  try {
+    entries = await list(daemonDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const candidates = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const name = typeof entry === 'string' ? entry : entry?.name;
+    if (typeof name !== 'string' || !DAEMON_DISCOVERY_FILE.test(name)) continue;
+    if (typeof entry !== 'string' && (entry.isSymbolicLink?.() || (typeof entry.isFile === 'function' && !entry.isFile()))) continue;
+    candidates.push(name);
+    if (candidates.length >= maxScan) break;
+  }
+  if (!candidates.length) return [];
+  const statResults = [];
+  for (let i = 0; i < candidates.length; i += 64) {
+    const batch = await Promise.all(candidates.slice(i, i + 64).map(async name => {
+      const full = join(daemonDir, name);
+      try {
+        const info = await fileStat(full);
+        if (info.isSymbolicLink?.() || !info.isFile?.()) return null;
+        if (!(info.size > 0 && info.size <= maxBytes)) return null;
+        if (typeof uid === 'number' && typeof info.uid === 'number' && info.uid !== uid) return null;
+        return { name, full, mtimeMs: Number.isFinite(info.mtimeMs) ? info.mtimeMs : 0 };
+      } catch {
+        return null;
+      }
+    }));
+    for (const item of batch) if (item) statResults.push(item);
+  }
+  statResults.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+  const selected = statResults.slice(0, maxFiles);
+  const records = [];
+  for (let i = 0; i < selected.length; i += 32) {
+    const batch = await Promise.all(selected.slice(i, i + 32).map(async item => {
+      try {
+        const raw = await read(item.full, 'utf8');
+        if (typeof raw !== 'string' || raw.length === 0 || raw.length > maxBytes) return null;
+        const data = JSON.parse(raw.replace(/^\uFEFF/, ''));
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+        const pid = integer(data.pid);
+        if (!validPid(pid)) return null;
+        const rawHttp = integer(data.httpPort ?? data.http_port);
+        const rawHttps = integer(data.httpsPort ?? data.https_port);
+        const httpPort = validPort(rawHttp) ? rawHttp : null;
+        const httpsPort = validPort(rawHttps) ? rawHttps : null;
+        if (httpPort === null && httpsPort === null) return null;
+        const rawToken = data.csrfToken ?? data.csrf_token;
+        const csrfToken = typeof rawToken === 'string' ? rawToken.trim() : '';
+        if (!csrfToken || csrfToken.length > 512) return null;
+        const rawVer = data.lsVersion ?? data.ls_version;
+        const lsVersion = typeof rawVer === 'string' && rawVer.trim() ? rawVer.trim().slice(0, 64) : null;
+        return { pid, httpPort, httpsPort, csrfToken, lsVersion, file: item.name, modifiedAt: item.mtimeMs };
+      } catch {
+        return null;
+      }
+    }));
+    for (const rec of batch) if (rec) records.push(rec);
+  }
+  return records;
+}
 
 function netstatSnapshot(text) {
   const ports=new Map(),rejectedPids=new Set();

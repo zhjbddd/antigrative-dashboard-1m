@@ -15,7 +15,7 @@ module.exports = function installAgPulseIpc(electron, authorities) {
     try {
       const origin=new URL(event.senderFrame?.url||event.sender.getURL());
       if(!['127.0.0.1','localhost','[::1]'].includes(origin.hostname)||!['http:','https:'].includes(origin.protocol))throw new Error('Invalid preference origin');
-      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['language','usageScope','speedStyle'].includes(key)))throw new Error('Invalid preference input');
+      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['language','usageScope','speedStyle','stripMode'].includes(key)))throw new Error('Invalid preference input');
       if(!preferenceStore){
         const file=path.join(os.homedir(),'.gemini','config','plugins','antigravity-pulse','compat','preferences.mjs');
         preferenceStore=import(require('node:url').pathToFileURL(file).href).then(({PreferencesStore})=>new PreferencesStore());
